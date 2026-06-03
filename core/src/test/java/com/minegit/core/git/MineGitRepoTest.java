@@ -1,0 +1,143 @@
+package com.minegit.core.git;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.minegit.core.fake.FakeWorldAdapter;
+import com.minegit.core.model.BlockState;
+import com.minegit.core.model.ChunkPos;
+import com.minegit.core.model.DimensionId;
+import com.minegit.core.model.NormalizedChunk;
+import com.minegit.core.repo.RepoLayout;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.lib.PersonIdent;
+import org.eclipse.jgit.revwalk.RevCommit;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+class MineGitRepoTest {
+
+    private static Clock fixedClock(long epochSeconds) {
+        return Clock.fixed(Instant.ofEpochSecond(epochSeconds), ZoneOffset.UTC);
+    }
+
+    @Test
+    void init_createsGitRepoWithMetadataFilesCommitted(@TempDir Path dir) throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            RepoLayout layout = new RepoLayout(dir);
+            assertTrue(Files.isDirectory(dir.resolve(".git")), "git repo created");
+            assertTrue(Files.isRegularFile(layout.minegitJsonPath()), "minegit.json present");
+            assertTrue(Files.isRegularFile(layout.levelDatPath()), "level.dat.snbt present");
+
+            List<CommitInfo> log = repo.log();
+            assertEquals(1, log.size(), "init makes one commit");
+        }
+
+        // The metadata files are actually committed (visible via JGit on HEAD).
+        try (Git git = Git.open(dir.toFile())) {
+            RevCommit head = git.log().setMaxCount(1).call().iterator().next();
+            PersonIdent committer = head.getCommitterIdent();
+            assertEquals("MineGit", committer.getName());
+            assertEquals("minegit@local", committer.getEmailAddress());
+        }
+    }
+
+    @Test
+    void commit_writesMgcForDirtyChunks_withPlayerAuthorAndMineGitCommitter(@TempDir Path dir)
+            throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        world.setBlock(DimensionId.OVERWORLD, 1, 5, 2, new BlockState("minecraft:stone"));
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            CommitInfo info = repo.commit("place stone", Author.of("Steve"));
+            assertNotNull(info, "a real change produces a commit");
+
+            RepoLayout layout = new RepoLayout(dir);
+            Path mgc = layout.chunkPath(DimensionId.OVERWORLD, new ChunkPos(0, 0));
+            assertTrue(Files.isRegularFile(mgc), ".mgc written for the dirty chunk");
+
+            assertEquals("Steve", info.getAuthor());
+            assertEquals("place stone", info.getMessage());
+            assertEquals(1000L, info.getEpochSeconds());
+        }
+
+        try (Git git = Git.open(dir.toFile())) {
+            RevCommit head = git.log().setMaxCount(1).call().iterator().next();
+            assertEquals("Steve", head.getAuthorIdent().getName());
+            assertEquals("MineGit", head.getCommitterIdent().getName());
+            assertEquals("minegit@local", head.getCommitterIdent().getEmailAddress());
+        }
+    }
+
+    @Test
+    void recommit_withNoRealChange_yieldsNoGitDelta(@TempDir Path dir) throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        world.setBlock(DimensionId.OVERWORLD, 1, 5, 2, new BlockState("minecraft:stone"));
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            repo.commit("place stone", Author.of("Steve"));
+            int sizeAfterFirst = repo.log().size();
+
+            // Re-set the SAME block: the chunk is marked dirty but its canonical .mgc is identical.
+            world.setBlock(DimensionId.OVERWORLD, 1, 5, 2, new BlockState("minecraft:stone"));
+            CommitInfo second = repo.commit("noop", Author.of("Steve"));
+
+            assertNull(second, "byte-identical re-serialization produces no commit");
+            assertEquals(sizeAfterFirst, repo.log().size(), "no new commit in the log");
+        }
+    }
+
+    @Test
+    void log_returnsCommitsNewestFirst(@TempDir Path dir) throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        MineGitRepo.init(dir, world, fixedClock(1000)).close();
+
+        world.setBlock(DimensionId.OVERWORLD, 0, 0, 0, new BlockState("minecraft:dirt"));
+        try (MineGitRepo repo = MineGitRepo.open(dir, world, fixedClock(2000))) {
+            repo.commit("first", Author.of("Alice"));
+        }
+
+        world.setBlock(DimensionId.OVERWORLD, 20, 0, 20, new BlockState("minecraft:stone"));
+        try (MineGitRepo repo = MineGitRepo.open(dir, world, fixedClock(3000))) {
+            repo.commit("second", Author.of("Bob"));
+
+            List<CommitInfo> log = repo.log();
+            assertEquals(3, log.size());
+            assertEquals("second", log.get(0).getMessage());
+            assertEquals("Bob", log.get(0).getAuthor());
+            assertEquals(3000L, log.get(0).getEpochSeconds());
+            assertEquals("first", log.get(1).getMessage());
+            assertEquals("Alice", log.get(1).getAuthor());
+            assertEquals(2000L, log.get(1).getEpochSeconds());
+            assertEquals("Initialize MineGit repository", log.get(2).getMessage());
+        }
+    }
+
+    @Test
+    void readChunk_decodesFromHeadTree_withoutCheckout(@TempDir Path dir) throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        world.setBlock(DimensionId.OVERWORLD, 3, 7, 4, new BlockState("minecraft:stone"));
+        ChunkPos pos = new ChunkPos(0, 0);
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            repo.commit("place", Author.of("Steve"));
+            NormalizedChunk expected = world.read(DimensionId.OVERWORLD, pos);
+
+            // Delete the working-tree file: a correct reader sources bytes from the object DB.
+            RepoLayout layout = new RepoLayout(dir);
+            Files.delete(layout.chunkPath(DimensionId.OVERWORLD, pos));
+
+            NormalizedChunk fromHead = repo.readChunk("HEAD", DimensionId.OVERWORLD, pos);
+            assertEquals(expected, fromHead);
+
+            assertNull(repo.readChunk("HEAD", DimensionId.OVERWORLD, new ChunkPos(99, 99)),
+                "absent chunk decodes to null");
+        }
+    }
+}
