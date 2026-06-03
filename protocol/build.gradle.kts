@@ -2,4 +2,8 @@ plugins {
     `java-library`
 }
 
-// Module skeleton only — the DiffPayload wire codec lands in batch 2.
+dependencies {
+    // The DiffPayload wire codec serializes core's WorldDiff model (Spec A §11).
+    // No Minecraft imports — core is the platform-agnostic engine tree.
+    api(project(":core"))
+}
