@@ -131,6 +131,48 @@ final class FakeWorldStore {
         }
     }
 
+    /**
+     * Captures the full block content of {@code adapter} into a new store, so a freshly {@code clone}d
+     * (materialized) world can be persisted to {@code world.json}. Each non-air block of every chunk in
+     * {@link FakeWorldAdapter#allChunks()} is recorded; the store then round-trips back through
+     * {@link #toAdapter()} to a world identical to the materialized one.
+     */
+    static FakeWorldStore fromAdapter(FakeWorldAdapter adapter) {
+        Objects.requireNonNull(adapter, "adapter");
+        Map<BlockKey, String> blocks = new LinkedHashMap<BlockKey, String>();
+        for (com.minegit.core.adapter.ChunkRef ref : adapter.allChunks()) {
+            String dim = ref.getDimension().getId();
+            com.minegit.core.model.NormalizedChunk chunk =
+                    adapter.read(ref.getDimension(), ref.getPos());
+            if (chunk == null) {
+                continue;
+            }
+            int cx = chunk.getCx();
+            int cz = chunk.getCz();
+            com.minegit.core.model.NormalizedSection[] sections = chunk.getSections();
+            for (int s = 0; s < sections.length; s++) {
+                com.minegit.core.model.NormalizedSection section = sections[s];
+                if (section == null) {
+                    continue;
+                }
+                int sectionY = chunk.getMinSection() + s;
+                List<BlockState> palette = section.getPalette();
+                int[] indices = section.getIndices();
+                for (int i = 0; i < com.minegit.core.model.NormalizedSection.VOLUME; i++) {
+                    BlockState state = palette.get(indices[i]);
+                    if (state.equals(BlockState.AIR)) {
+                        continue;
+                    }
+                    int x = cx * 16 + i % 16;
+                    int y = sectionY * 16 + i / 256;
+                    int z = cz * 16 + (i % 256) / 16;
+                    blocks.put(new BlockKey(dim, x, y, z), state.getId());
+                }
+            }
+        }
+        return new FakeWorldStore(adapter.getMinSection(), adapter.getSectionCount(), blocks);
+    }
+
     /** Replays the stored blocks into a fresh in-memory {@link FakeWorldAdapter}. */
     FakeWorldAdapter toAdapter() {
         FakeWorldAdapter adapter = new FakeWorldAdapter(minSection, sectionCount);

@@ -10,6 +10,7 @@ import com.minegit.core.fake.BareRepo;
 import com.minegit.core.fake.FakeWorldAdapter;
 import com.minegit.core.model.BlockState;
 import com.minegit.core.model.DimensionId;
+import com.minegit.core.model.WorldDiff;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -124,6 +125,98 @@ class RemoteOpsTest {
                         "fetch did not touch the working tree");
                 assertNotEquals(
                         localBefore, remoteHead, "the two heads genuinely differ");
+            }
+        }
+    }
+
+    @Test
+    void pull_fetchesAppliesAndReturnsDelta(@TempDir Path tmp) throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        try (BareRepo remote = BareRepo.create(tmp.resolve("remote.git"))) {
+            // Publisher commits a stone block and pushes it to the remote.
+            FakeWorldAdapter pubWorld = new FakeWorldAdapter();
+            try (MineGitRepo pub = MineGitRepo.init(tmp.resolve("pub"), pubWorld)) {
+                pub.remoteSet(remote.fileUrl());
+                pubWorld.setBlock(DimensionId.OVERWORLD, 1, 64, 2, stone);
+                assertNotNull(pub.commit("publish stone", Author.of("Pub")));
+                assertTrue(pub.push(CRED).isOk(), "publisher push ok");
+            }
+
+            // A fresh, empty subscriber pulls the published world.
+            FakeWorldAdapter subWorld = new FakeWorldAdapter();
+            try (MineGitRepo sub = MineGitRepo.init(tmp.resolve("sub"), subWorld)) {
+                sub.remoteSet(remote.fileUrl());
+
+                WorldDiff applied = sub.pull(CRED);
+
+                // The stone arrived in the live world and the returned delta describes it.
+                assertEquals(stone, subWorld.getBlock(DimensionId.OVERWORLD, 1, 64, 2));
+                assertEquals(1, applied.getAdded(), "one block added by pull");
+                assertEquals(0, applied.getRemoved());
+                assertEquals(0, applied.getChanged());
+
+                // Local master fast-forwarded to the remote head: a re-pull is a no-op.
+                WorldDiff again = sub.pull(CRED);
+                assertTrue(again.getDimensions().isEmpty(), "second pull applies nothing");
+            }
+        }
+    }
+
+    @Test
+    void clone_materializesWorldFromRemote(@TempDir Path tmp) throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        BlockState dirt = new BlockState("minecraft:dirt");
+        try (BareRepo remote = BareRepo.create(tmp.resolve("remote.git"))) {
+            // Publisher builds a world spanning two chunks and pushes it.
+            FakeWorldAdapter pubWorld = new FakeWorldAdapter();
+            try (MineGitRepo pub = MineGitRepo.init(tmp.resolve("pub"), pubWorld)) {
+                pub.remoteSet(remote.fileUrl());
+                pubWorld.setBlock(DimensionId.OVERWORLD, 1, 64, 2, stone);
+                pubWorld.setBlock(DimensionId.OVERWORLD, 20, -10, 0, dirt); // chunk (1,0)
+                pub.commit("publish world", Author.of("Pub"));
+                assertTrue(pub.push(CRED).isOk(), "publisher push ok");
+            }
+
+            // Clone into a fresh dir + empty world.
+            Path fresh = tmp.resolve("fresh");
+            FakeWorldAdapter world = new FakeWorldAdapter();
+            try (MineGitRepo repo = MineGitRepo.clone(remote.fileUrl(), fresh, CRED, world)) {
+                // Every published block was materialized into the live world.
+                assertEquals(stone, world.getBlock(DimensionId.OVERWORLD, 1, 64, 2));
+                assertEquals(dirt, world.getBlock(DimensionId.OVERWORLD, 20, -10, 0));
+
+                // The clone is a real repo with the published history, and its working tree is clean
+                // against the materialized world (live world == HEAD).
+                assertFalse(repo.log().isEmpty(), "clone carries history");
+                assertTrue(
+                        com.minegit.core.diff.WorldDiffer.diffWorkingTree(repo, world)
+                                .getDimensions().isEmpty(),
+                        "materialized world matches HEAD");
+            }
+        }
+    }
+
+    @Test
+    void pull_refusesDirtyTree(@TempDir Path tmp) throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        BlockState glass = new BlockState("minecraft:glass");
+        try (BareRepo remote = BareRepo.create(tmp.resolve("remote.git"))) {
+            FakeWorldAdapter pubWorld = new FakeWorldAdapter();
+            try (MineGitRepo pub = MineGitRepo.init(tmp.resolve("pub"), pubWorld)) {
+                pub.remoteSet(remote.fileUrl());
+                pubWorld.setBlock(DimensionId.OVERWORLD, 1, 64, 2, stone);
+                pub.commit("publish stone", Author.of("Pub"));
+                pub.push(CRED);
+            }
+
+            FakeWorldAdapter subWorld = new FakeWorldAdapter();
+            try (MineGitRepo sub = MineGitRepo.init(tmp.resolve("sub"), subWorld)) {
+                sub.remoteSet(remote.fileUrl());
+                // Uncommitted local edit makes the working tree dirty.
+                subWorld.setBlock(DimensionId.OVERWORLD, 9, 64, 9, glass);
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        WorkingTreeDirtyException.class, () -> sub.pull(CRED),
+                        "dirty tree refused by pull");
             }
         }
     }

@@ -173,6 +173,39 @@ public final class FakeWorldAdapter implements WorldAdapter {
         }
     }
 
+    @Override
+    public void writeChunk(DimensionId dimension, NormalizedChunk chunk) {
+        java.util.Objects.requireNonNull(dimension, "dimension");
+        java.util.Objects.requireNonNull(chunk, "chunk");
+        int cx = chunk.getCx();
+        int cz = chunk.getCz();
+        NormalizedSection[] sections = chunk.getSections();
+        for (int s = 0; s < sections.length; s++) {
+            NormalizedSection section = sections[s];
+            if (section == null) {
+                continue; // all-air section, nothing to place
+            }
+            int sectionY = chunk.getMinSection() + s;
+            List<BlockState> palette = section.getPalette();
+            int[] indices = section.getIndices();
+            for (int i = 0; i < NormalizedSection.VOLUME; i++) {
+                BlockState state = palette.get(indices[i]);
+                if (state.equals(BlockState.AIR)) {
+                    continue;
+                }
+                int localY = i / 256;
+                int localZ = (i % 256) / 16;
+                int localX = i % 16;
+                setBlock(
+                        dimension,
+                        cx * 16 + localX,
+                        sectionY * 16 + localY,
+                        cz * 16 + localZ,
+                        state);
+            }
+        }
+    }
+
     /**
      * Builds the {@link NormalizedSection} for section index {@code s}, or returns {@code null} if the
      * section holds nothing but air (the chunk model's convention for an empty section). The palette
