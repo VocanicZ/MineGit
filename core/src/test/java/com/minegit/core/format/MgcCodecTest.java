@@ -241,6 +241,66 @@ class MgcCodecTest {
     }
 
     @Test
+    void serializesAsCompressedVersion2() {
+        List<BlockState> palette = Collections.singletonList(BlockState.AIR);
+        NormalizedChunk chunk =
+                new NormalizedChunk(0, 0, 0, new NormalizedSection[] {section(palette, indices(0))},
+                        biomes(0, 0), Collections.<BlockEntity>emptyList());
+        byte[] b = MgcCodec.serialize(chunk);
+        assertEquals(2, b[4] & 0xFF); // formatVersion bumped: new chunks are DEFLATE-compressed
+    }
+
+    @Test
+    void readsLegacyUncompressedV1Blob() {
+        // A batch-1 blob: magic + version 1 + uncompressed body.
+        List<BlockState> p0 =
+                Arrays.asList(BlockState.AIR, stateWithProps(), new BlockState("minecraft:stone"));
+        int[] i0 = indices(0);
+        i0[5] = 1;
+        i0[6] = 2;
+        List<BlockEntity> bes =
+                Arrays.asList(
+                        new BlockEntity(0, 64, 0, "{id:\"sign\"}"),
+                        new BlockEntity(2, 70, 3, "{id:\"chest\"}"));
+        NormalizedChunk chunk =
+                new NormalizedChunk(
+                        -1, 2, -4, new NormalizedSection[] {section(p0, i0)}, biomes(64, 3), bes);
+
+        byte[] legacy = MgcCodec.serializeLegacyV1(chunk);
+        assertEquals(1, legacy[4] & 0xFF); // legacy is version 1, uncompressed
+        assertEquals(chunk, MgcCodec.deserialize(legacy)); // reader auto-detects + decodes it
+    }
+
+    @Test
+    void compressedDecodesEqualToLegacy() {
+        List<BlockState> palette = Arrays.asList(BlockState.AIR, new BlockState("minecraft:stone"));
+        int[] idx = indices(1);
+        idx[0] = 0;
+        NormalizedChunk chunk =
+                new NormalizedChunk(
+                        7, -3, -2, new NormalizedSection[] {section(palette, idx)}, biomes(8, 2),
+                        Collections.<BlockEntity>emptyList());
+        // Old and new encodings differ in bytes but decode to the same chunk.
+        assertNotEquals(
+                Arrays.toString(MgcCodec.serializeLegacyV1(chunk)),
+                Arrays.toString(MgcCodec.serialize(chunk)));
+        assertEquals(
+                MgcCodec.deserialize(MgcCodec.serializeLegacyV1(chunk)),
+                MgcCodec.deserialize(MgcCodec.serialize(chunk)));
+    }
+
+    @Test
+    void compressedShrinksRepetitiveChunk() {
+        // A wholly-uniform chunk compresses far below its uncompressed body.
+        List<BlockState> palette = Collections.singletonList(new BlockState("minecraft:stone"));
+        NormalizedChunk chunk =
+                new NormalizedChunk(0, 0, 0, new NormalizedSection[] {section(palette, indices(0))},
+                        biomes(64, 4), Collections.<BlockEntity>emptyList());
+        org.junit.jupiter.api.Assertions.assertTrue(
+                MgcCodec.serialize(chunk).length < MgcCodec.serializeLegacyV1(chunk).length);
+    }
+
+    @Test
     void startsWithMagic() {
         List<BlockState> palette = Collections.singletonList(BlockState.AIR);
         NormalizedChunk chunk =
