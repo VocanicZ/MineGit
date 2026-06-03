@@ -2,10 +2,13 @@ package com.minegit.core.git;
 
 import com.minegit.core.adapter.ChunkRef;
 import com.minegit.core.adapter.WorldAdapter;
+import com.minegit.core.diff.WorldDiffer;
 import com.minegit.core.format.MgcCodec;
+import com.minegit.core.model.ChunkDiff;
 import com.minegit.core.model.ChunkPos;
 import com.minegit.core.model.DimensionId;
 import com.minegit.core.model.NormalizedChunk;
+import com.minegit.core.model.WorldDiff;
 import com.minegit.core.repo.MineGitMeta;
 import com.minegit.core.repo.RepoLayout;
 import java.io.Closeable;
@@ -24,6 +27,7 @@ import java.util.Set;
 import java.util.TimeZone;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.ListBranchCommand.ListMode;
+import org.eclipse.jgit.api.ResetCommand.ResetType;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Ref;
@@ -317,6 +321,53 @@ public final class MineGitRepo implements Closeable {
         } catch (GitAPIException e) {
             throw new IllegalStateException("branch list failed", e);
         }
+    }
+
+    /**
+     * Reverts the live world to {@code target} (a branch name, commit SHA, or relative rev like
+     * {@code "HEAD~1"}), refusing to clobber an uncommitted working tree.
+     *
+     * @throws WorkingTreeDirtyException if the live world differs from {@code HEAD}
+     * @see #checkout(String, boolean)
+     */
+    public WorldDiff checkout(String target) {
+        return checkout(target, false);
+    }
+
+    /**
+     * Reverts the live world to {@code target}. Computes {@code HEAD → target} as a {@link WorldDiff}
+     * via {@link WorldDiffer}, replays each chunk's {@link com.minegit.core.model.BlockChange}s onto
+     * the {@link WorldAdapter} via {@link WorldAdapter#apply}, then moves the local ref to
+     * {@code target} (a hard reset that also syncs the {@code .mgc} working tree). Returns the applied
+     * {@code WorldDiff} so a frontend can resend the affected chunks.
+     *
+     * <p>Unless {@code force} is set, a non-empty working tree (live world ≠ {@code HEAD}) raises a
+     * {@link WorkingTreeDirtyException}, mirroring git's refusal to clobber uncommitted work. No
+     * Minecraft dependencies.
+     */
+    public WorldDiff checkout(String target, boolean force) {
+        Objects.requireNonNull(target, "target");
+        if (!force) {
+            WorldDiff dirty = WorldDiffer.diffWorkingTree(this, adapter);
+            if (!dirty.getDimensions().isEmpty()) {
+                throw new WorkingTreeDirtyException(
+                    "working tree has uncommitted changes (" + dirty + "); "
+                        + "commit or checkout with force");
+            }
+        }
+        WorldDiff applied = WorldDiffer.diffRefs(this, "HEAD", target);
+        for (java.util.Map.Entry<DimensionId, List<ChunkDiff>> e
+                : applied.getDimensions().entrySet()) {
+            for (ChunkDiff chunkDiff : e.getValue()) {
+                adapter.apply(e.getKey(), chunkDiff.getPos(), chunkDiff.getChanges());
+            }
+        }
+        try {
+            git.reset().setMode(ResetType.HARD).setRef(target).call();
+        } catch (GitAPIException ex) {
+            throw new IllegalStateException("checkout failed to move ref to " + target, ex);
+        }
+        return applied;
     }
 
     /** The MGRF layout this repository writes to. */

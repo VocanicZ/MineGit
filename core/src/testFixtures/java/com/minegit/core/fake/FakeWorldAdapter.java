@@ -159,6 +159,20 @@ public final class FakeWorldAdapter implements WorldAdapter {
         return drained;
     }
 
+    @Override
+    public void apply(
+            DimensionId dimension,
+            ChunkPos pos,
+            List<com.minegit.core.model.BlockChange> changes) {
+        java.util.Objects.requireNonNull(dimension, "dimension");
+        java.util.Objects.requireNonNull(pos, "pos");
+        java.util.Objects.requireNonNull(changes, "changes");
+        for (com.minegit.core.model.BlockChange c : changes) {
+            BlockState target = c.getNewState() != null ? c.getNewState() : BlockState.AIR;
+            setBlock(dimension, c.getX(), c.getY(), c.getZ(), target);
+        }
+    }
+
     /**
      * Builds the {@link NormalizedSection} for section index {@code s}, or returns {@code null} if the
      * section holds nothing but air (the chunk model's convention for an empty section). The palette

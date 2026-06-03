@@ -9,11 +9,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.minegit.core.adapter.ChunkRef;
+import com.minegit.core.model.BlockChange;
 import com.minegit.core.model.BlockState;
 import com.minegit.core.model.ChunkPos;
 import com.minegit.core.model.DimensionId;
 import com.minegit.core.model.NormalizedChunk;
 import com.minegit.core.model.NormalizedSection;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -235,6 +237,40 @@ class FakeWorldAdapterTest {
     @Test
     void invalidSectionCountRejected() {
         assertThrows(IllegalArgumentException.class, () -> new FakeWorldAdapter(0, 0));
+    }
+
+    // --- apply (checkout delta) -------------------------------------------------------------
+
+    @Test
+    void applyAddsChangesAndRemovesBlocks() {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, STONE); // will be removed
+        world.setBlock(DimensionId.OVERWORLD, 1, 64, 0, STONE); // will be changed to dirt
+        ChunkPos pos = new ChunkPos(0, 0);
+        world.apply(
+                DimensionId.OVERWORLD,
+                pos,
+                Arrays.asList(
+                        BlockChange.remove(0, 64, 0, STONE),
+                        BlockChange.change(1, 64, 0, STONE, DIRT),
+                        BlockChange.add(2, 64, 0, DIRT)));
+        assertSame(BlockState.AIR, world.getBlock(DimensionId.OVERWORLD, 0, 64, 0));
+        assertEquals(DIRT, world.getBlock(DimensionId.OVERWORLD, 1, 64, 0));
+        assertEquals(DIRT, world.getBlock(DimensionId.OVERWORLD, 2, 64, 0));
+    }
+
+    @Test
+    void applyRejectsNulls() {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        assertThrows(
+                NullPointerException.class,
+                () -> world.apply(null, new ChunkPos(0, 0), Collections.<BlockChange>emptyList()));
+        assertThrows(
+                NullPointerException.class,
+                () -> world.apply(DimensionId.OVERWORLD, null, Collections.<BlockChange>emptyList()));
+        assertThrows(
+                NullPointerException.class,
+                () -> world.apply(DimensionId.OVERWORLD, new ChunkPos(0, 0), null));
     }
 
     // --- null guards ------------------------------------------------------------------------
