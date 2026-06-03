@@ -23,8 +23,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TimeZone;
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.ListBranchCommand.ListMode;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
@@ -276,6 +278,44 @@ public final class MineGitRepo implements Closeable {
             return out;
         } catch (IOException e) {
             throw new UncheckedIOException("listChunks failed", e);
+        }
+    }
+
+    /**
+     * Creates a local branch named {@code name} at the current {@code HEAD}.
+     *
+     * @return a local {@link BranchRef} for the new branch.
+     */
+    public BranchRef branch(String name) {
+        Objects.requireNonNull(name, "name");
+        try {
+            git.branchCreate().setName(name).call();
+            return BranchRef.local(name);
+        } catch (GitAPIException e) {
+            throw new IllegalStateException("branch create failed for " + name, e);
+        }
+    }
+
+    /**
+     * Lists every branch ref: local branches ({@code refs/heads/*}) and remote-tracking branches
+     * ({@code refs/remotes/*}), tagged <strong>distinctly</strong> via {@link BranchRef#isRemote()}.
+     * A remote-tracking ref keeps its remote-qualified name (e.g. {@code "origin/main"}) so it never
+     * collides with a like-named local branch.
+     */
+    public List<BranchRef> branches() {
+        try {
+            List<BranchRef> out = new ArrayList<BranchRef>();
+            for (Ref ref : git.branchList().setListMode(ListMode.ALL).call()) {
+                String full = ref.getName();
+                if (full.startsWith("refs/heads/")) {
+                    out.add(BranchRef.local(full.substring("refs/heads/".length())));
+                } else if (full.startsWith("refs/remotes/")) {
+                    out.add(BranchRef.remote(full.substring("refs/remotes/".length())));
+                }
+            }
+            return out;
+        } catch (GitAPIException e) {
+            throw new IllegalStateException("branch list failed", e);
         }
     }
 
