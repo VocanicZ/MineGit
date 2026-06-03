@@ -370,6 +370,85 @@ public final class MineGitRepo implements Closeable {
         return applied;
     }
 
+    /**
+     * Configures the {@code origin} remote to point at {@code url}, installing the standard
+     * {@code +refs/heads/*:refs/remotes/origin/*} fetch refspec so a later {@link #fetch(Credential)}
+     * updates the {@code origin/*} remote-tracking branches. Overwrites any existing {@code origin}.
+     */
+    public void remoteSet(String url) {
+        Objects.requireNonNull(url, "url");
+        try {
+            org.eclipse.jgit.lib.StoredConfig config = repository.getConfig();
+            config.setString("remote", "origin", "url", url);
+            config.setString(
+                "remote", "origin", "fetch", "+refs/heads/*:refs/remotes/origin/*");
+            config.save();
+        } catch (IOException e) {
+            throw new UncheckedIOException("remoteSet failed for " + url, e);
+        }
+    }
+
+    /**
+     * Fetches from {@code origin}, updating the {@code origin/*} remote-tracking refs only. The
+     * working tree and local branches are untouched — no checkout, no world change — so the diff
+     * engine can compare against {@code origin/*} without disturbing the live world.
+     */
+    public void fetch(Credential cred) {
+        Objects.requireNonNull(cred, "cred");
+        try {
+            org.eclipse.jgit.api.FetchCommand fetch = git.fetch().setRemote("origin");
+            cred.applyTo(fetch);
+            fetch.call();
+        } catch (GitAPIException e) {
+            throw new IllegalStateException("fetch failed", e);
+        }
+    }
+
+    /**
+     * Pushes the current branch to {@code origin} and reports the <strong>per-ref</strong> outcome.
+     * Each attempted ref maps to {@link PushResult.Status#OK OK} (advanced),
+     * {@link PushResult.Status#UP_TO_DATE UP_TO_DATE} (already current), or
+     * {@link PushResult.Status#REJECTED REJECTED} (refused, e.g. a non-fast-forward) — the remote is
+     * never force-updated.
+     */
+    public PushResult push(Credential cred) {
+        Objects.requireNonNull(cred, "cred");
+        try {
+            String branch = repository.getBranch();
+            org.eclipse.jgit.transport.RefSpec spec =
+                new org.eclipse.jgit.transport.RefSpec(
+                    "refs/heads/" + branch + ":refs/heads/" + branch);
+            org.eclipse.jgit.api.PushCommand push =
+                git.push().setRemote("origin").setRefSpecs(spec);
+            cred.applyTo(push);
+            List<PushResult.RefUpdate> updates = new ArrayList<PushResult.RefUpdate>();
+            for (org.eclipse.jgit.transport.PushResult result : push.call()) {
+                for (org.eclipse.jgit.transport.RemoteRefUpdate u : result.getRemoteUpdates()) {
+                    updates.add(
+                        new PushResult.RefUpdate(
+                            u.getRemoteName(), mapStatus(u.getStatus()), u.getMessage()));
+                }
+            }
+            return new PushResult(updates);
+        } catch (IOException e) {
+            throw new UncheckedIOException("push failed", e);
+        } catch (GitAPIException e) {
+            throw new IllegalStateException("push failed", e);
+        }
+    }
+
+    private static PushResult.Status mapStatus(
+            org.eclipse.jgit.transport.RemoteRefUpdate.Status status) {
+        switch (status) {
+            case OK:
+                return PushResult.Status.OK;
+            case UP_TO_DATE:
+                return PushResult.Status.UP_TO_DATE;
+            default:
+                return PushResult.Status.REJECTED;
+        }
+    }
+
     /** The MGRF layout this repository writes to. */
     public RepoLayout getLayout() {
         return layout;
