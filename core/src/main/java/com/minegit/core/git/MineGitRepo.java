@@ -1,0 +1,326 @@
+package com.minegit.core.git;
+
+import com.minegit.core.adapter.ChunkRef;
+import com.minegit.core.adapter.WorldAdapter;
+import com.minegit.core.format.MgcCodec;
+import com.minegit.core.model.ChunkPos;
+import com.minegit.core.model.DimensionId;
+import com.minegit.core.model.NormalizedChunk;
+import com.minegit.core.repo.MineGitMeta;
+import com.minegit.core.repo.RepoLayout;
+import java.io.Closeable;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.TimeZone;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.PersonIdent;
+import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevSort;
+import org.eclipse.jgit.revwalk.RevTree;
+import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.treewalk.TreeWalk;
+
+/**
+ * JGit-backed MineGit repository over an {@link RepoLayout MGRF} working tree.
+ *
+ * <p>The repository is a <strong>normal</strong> (non-bare) git repo whose working tree holds the
+ * {@code .mgc} chunk blobs and SNBT metadata. Batch-1 operations:
+ *
+ * <ul>
+ *   <li>{@link #init} — create the repo and the initial MGRF structures ({@code minegit.json},
+ *       {@code level/level.dat.snbt}), then commit them.
+ *   <li>{@link #commit} — serialize each dirty chunk to its MGRF {@code .mgc} path via
+ *       {@link MgcCodec}, stage the changes, and create a commit whose author is the triggering
+ *       player and whose committer is the fixed {@code MineGit <minegit@local>} identity. Because
+ *       {@code .mgc} serialization is deterministic, a chunk whose content did not actually change
+ *       produces no git delta and an otherwise-empty commit is skipped.
+ *   <li>{@link #log} — walk commits newest-first.
+ *   <li>{@link #readChunk} — decode a chunk's {@code .mgc} blob directly from a commit's tree via a
+ *       {@link TreeWalk}, with no working-tree checkout.
+ * </ul>
+ *
+ * <p>The class owns no threads; the caller performs world reads and git work on whatever thread it
+ * chooses. No Minecraft dependencies.
+ */
+public final class MineGitRepo implements Closeable {
+
+    /** Fixed committer name for every MineGit commit. */
+    public static final String COMMITTER_NAME = "MineGit";
+
+    /** Fixed committer email for every MineGit commit. */
+    public static final String COMMITTER_EMAIL = "minegit@local";
+
+    private static final TimeZone UTC = TimeZone.getTimeZone("UTC");
+    private static final String LEVEL_DAT_PLACEHOLDER = "{}\n";
+
+    private final Git git;
+    private final Repository repository;
+    private final RepoLayout layout;
+    private final WorldAdapter adapter;
+    private final Clock clock;
+
+    private boolean firstChunkCommitDone;
+
+    private MineGitRepo(Git git, RepoLayout layout, WorldAdapter adapter, Clock clock) {
+        this.git = git;
+        this.repository = git.getRepository();
+        this.layout = layout;
+        this.adapter = adapter;
+        this.clock = clock;
+    }
+
+    /** Initializes a new MineGit repository in {@code repoDir}, using the system UTC clock. */
+    public static MineGitRepo init(Path repoDir, WorldAdapter adapter) {
+        return init(repoDir, adapter, Clock.systemUTC());
+    }
+
+    /**
+     * Initializes a new MineGit repository in {@code repoDir}: creates the (non-bare) git repo,
+     * writes the initial MGRF metadata ({@code minegit.json}, {@code level/level.dat.snbt}), and
+     * commits them under the {@code MineGit <minegit@local>} identity. Returns an open handle.
+     */
+    public static MineGitRepo init(Path repoDir, WorldAdapter adapter, Clock clock) {
+        Objects.requireNonNull(repoDir, "repoDir");
+        Objects.requireNonNull(adapter, "adapter");
+        Objects.requireNonNull(clock, "clock");
+        try {
+            Files.createDirectories(repoDir);
+            Git git = Git.init().setDirectory(repoDir.toFile()).call();
+            RepoLayout layout = new RepoLayout(repoDir);
+            MineGitRepo repo = new MineGitRepo(git, layout, adapter, clock);
+            repo.writeInitialMetadata();
+            repo.stageAll();
+            PersonIdent committer = repo.committerIdent();
+            git.commit()
+                .setMessage("Initialize MineGit repository")
+                .setAuthor(committer)
+                .setCommitter(committer)
+                .call();
+            return repo;
+        } catch (GitAPIException e) {
+            throw new IllegalStateException("git init failed for " + repoDir, e);
+        } catch (IOException e) {
+            throw new UncheckedIOException("init failed for " + repoDir, e);
+        }
+    }
+
+    /** Opens an already-initialized MineGit repository, using the system UTC clock. */
+    public static MineGitRepo open(Path repoDir, WorldAdapter adapter) {
+        return open(repoDir, adapter, Clock.systemUTC());
+    }
+
+    /** Opens an already-initialized MineGit repository in {@code repoDir}. */
+    public static MineGitRepo open(Path repoDir, WorldAdapter adapter, Clock clock) {
+        Objects.requireNonNull(repoDir, "repoDir");
+        Objects.requireNonNull(adapter, "adapter");
+        Objects.requireNonNull(clock, "clock");
+        try {
+            Git git = Git.open(repoDir.toFile());
+            MineGitRepo repo = new MineGitRepo(git, new RepoLayout(repoDir), adapter, clock);
+            repo.firstChunkCommitDone = repo.headHasChunks();
+            return repo;
+        } catch (IOException e) {
+            throw new UncheckedIOException("open failed for " + repoDir, e);
+        }
+    }
+
+    /**
+     * Snapshots the world into a commit. The chunk set is {@link WorldAdapter#allChunks()} on the
+     * first content commit and {@link WorldAdapter#drainDirty()} thereafter; each chunk is read,
+     * serialized to its {@code .mgc} path, and staged. The commit's author is {@code author} and its
+     * committer is {@code MineGit <minegit@local>}.
+     *
+     * @return the created {@link CommitInfo}, or {@code null} if nothing actually changed (a chunk
+     *     re-serialized to byte-identical content yields no git delta, so no commit is created).
+     */
+    public CommitInfo commit(String message, Author author) {
+        Objects.requireNonNull(message, "message");
+        Objects.requireNonNull(author, "author");
+
+        Set<ChunkRef> refs;
+        if (firstChunkCommitDone) {
+            refs = adapter.drainDirty();
+        } else {
+            refs = adapter.allChunks();
+            adapter.drainDirty(); // consume the dirty set so later drains start clean
+            firstChunkCommitDone = true;
+        }
+
+        try {
+            for (ChunkRef ref : refs) {
+                writeChunk(ref.getDimension(), ref.getPos());
+            }
+            stageAll();
+            if (!git.status().call().hasUncommittedChanges()) {
+                return null;
+            }
+            Date when = Date.from(clock.instant());
+            PersonIdent authorIdent = new PersonIdent(author.getName(), author.getEmail(), when, UTC);
+            PersonIdent committerIdent =
+                new PersonIdent(COMMITTER_NAME, COMMITTER_EMAIL, when, UTC);
+            RevCommit commit = git.commit()
+                .setMessage(message)
+                .setAuthor(authorIdent)
+                .setCommitter(committerIdent)
+                .call();
+            return toCommitInfo(commit);
+        } catch (GitAPIException e) {
+            throw new IllegalStateException("commit failed", e);
+        } catch (IOException e) {
+            throw new UncheckedIOException("commit failed", e);
+        }
+    }
+
+    /** Commits in the conventional layout (author email synthesized from the player name). */
+    public CommitInfo commit(String message, String authorName) {
+        return commit(message, Author.of(authorName));
+    }
+
+    /** All commits, newest first. Empty if the repository has no commits yet. */
+    public List<CommitInfo> log() {
+        try {
+            ObjectId head = repository.resolve("HEAD");
+            if (head == null) {
+                return Collections.emptyList();
+            }
+            List<CommitInfo> out = new ArrayList<CommitInfo>();
+            try (RevWalk walk = new RevWalk(repository)) {
+                walk.sort(RevSort.COMMIT_TIME_DESC);
+                walk.markStart(walk.parseCommit(head));
+                for (RevCommit c : walk) {
+                    out.add(toCommitInfo(c));
+                }
+            }
+            return out;
+        } catch (IOException e) {
+            throw new UncheckedIOException("log failed", e);
+        }
+    }
+
+    /**
+     * Decodes the chunk at {@code (dimension, pos)} from the tree of revision {@code rev} (e.g.
+     * {@code "HEAD"}, a branch name, or a commit SHA) by reading its {@code .mgc} blob through a
+     * {@link TreeWalk}. No working-tree checkout occurs — the bytes come straight from the object
+     * database — so the diff engine can build a tree-backed chunk source.
+     *
+     * @return the decoded chunk, or {@code null} if {@code rev} resolves to nothing or holds no
+     *     {@code .mgc} for that chunk.
+     */
+    public NormalizedChunk readChunk(String rev, DimensionId dimension, ChunkPos pos) {
+        Objects.requireNonNull(rev, "rev");
+        Objects.requireNonNull(dimension, "dimension");
+        Objects.requireNonNull(pos, "pos");
+        try {
+            ObjectId commitId = repository.resolve(rev);
+            if (commitId == null) {
+                return null;
+            }
+            String path = relativeChunkPath(dimension, pos);
+            try (RevWalk walk = new RevWalk(repository)) {
+                RevTree tree = walk.parseCommit(commitId).getTree();
+                try (TreeWalk tw = TreeWalk.forPath(repository, path, tree)) {
+                    if (tw == null) {
+                        return null;
+                    }
+                    byte[] bytes = repository.open(tw.getObjectId(0)).getBytes();
+                    return MgcCodec.deserialize(bytes);
+                }
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("readChunk failed", e);
+        }
+    }
+
+    /** The MGRF layout this repository writes to. */
+    public RepoLayout getLayout() {
+        return layout;
+    }
+
+    @Override
+    public void close() {
+        git.close();
+    }
+
+    // ---- internals ----------------------------------------------------------------------------
+
+    private void writeInitialMetadata() throws IOException {
+        List<String> dims = new ArrayList<String>();
+        for (DimensionId d : adapter.dimensions()) {
+            dims.add(d.getId());
+        }
+        MineGitMeta meta = new MineGitMeta(1, Collections.<String>emptyList(), dims);
+        Files.createDirectories(layout.minegitJsonPath().getParent());
+        meta.writeTo(layout.minegitJsonPath());
+        Path levelDat = layout.levelDatPath();
+        Files.createDirectories(levelDat.getParent());
+        Files.write(levelDat, LEVEL_DAT_PLACEHOLDER.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Serializes the live chunk to its {@code .mgc} path, or removes the file if the chunk is gone. */
+    private void writeChunk(DimensionId dimension, ChunkPos pos) throws IOException {
+        Path target = layout.chunkPath(dimension, pos);
+        NormalizedChunk chunk = adapter.read(dimension, pos);
+        if (chunk == null) {
+            Files.deleteIfExists(target);
+            return;
+        }
+        Files.createDirectories(target.getParent());
+        Files.write(target, MgcCodec.serialize(chunk));
+    }
+
+    /** Stages all additions, modifications, and deletions in the working tree. */
+    private void stageAll() throws GitAPIException {
+        git.add().addFilepattern(".").call();
+        git.add().addFilepattern(".").setUpdate(true).call();
+    }
+
+    private boolean headHasChunks() throws IOException {
+        ObjectId head = repository.resolve("HEAD");
+        if (head == null) {
+            return false;
+        }
+        try (RevWalk walk = new RevWalk(repository)) {
+            RevTree tree = walk.parseCommit(head).getTree();
+            try (TreeWalk tw = new TreeWalk(repository)) {
+                tw.addTree(tree);
+                tw.setRecursive(true);
+                while (tw.next()) {
+                    if (tw.getPathString().endsWith(".mgc")) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private String relativeChunkPath(DimensionId dimension, ChunkPos pos) {
+        Path rel = layout.getRepoDir().relativize(layout.chunkPath(dimension, pos));
+        return rel.toString().replace('\\', '/');
+    }
+
+    private PersonIdent committerIdent() {
+        return new PersonIdent(COMMITTER_NAME, COMMITTER_EMAIL, Date.from(clock.instant()), UTC);
+    }
+
+    private static CommitInfo toCommitInfo(RevCommit c) {
+        return new CommitInfo(
+            c.getName(),
+            c.getAuthorIdent().getName(),
+            c.getFullMessage(),
+            c.getCommitTime());
+    }
+}
