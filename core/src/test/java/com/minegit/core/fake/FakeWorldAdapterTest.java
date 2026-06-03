@@ -273,6 +273,41 @@ class FakeWorldAdapterTest {
                 () -> world.apply(DimensionId.OVERWORLD, new ChunkPos(0, 0), null));
     }
 
+    // --- writeChunk (clone materialize) -----------------------------------------------------
+
+    @Test
+    void writeChunkMaterializesEveryNonAirBlock() {
+        FakeWorldAdapter source = new FakeWorldAdapter();
+        source.setBlock(DimensionId.OVERWORLD, 1, 64, 2, STONE);
+        source.setBlock(DimensionId.OVERWORLD, 3, -10, 4, DIRT);
+        NormalizedChunk chunk = source.read(DimensionId.OVERWORLD, new ChunkPos(0, 0));
+
+        FakeWorldAdapter dest = new FakeWorldAdapter();
+        dest.writeChunk(DimensionId.OVERWORLD, chunk);
+
+        assertEquals(STONE, dest.getBlock(DimensionId.OVERWORLD, 1, 64, 2));
+        assertEquals(DIRT, dest.getBlock(DimensionId.OVERWORLD, 3, -10, 4));
+        // The round-tripped chunk is byte-for-byte the same normalized chunk.
+        assertEquals(chunk, dest.read(DimensionId.OVERWORLD, new ChunkPos(0, 0)));
+    }
+
+    @Test
+    void writeChunkRejectsNulls() {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        NormalizedChunk chunk =
+                new NormalizedChunk(
+                        0,
+                        0,
+                        -4,
+                        new NormalizedSection[1],
+                        new int[0],
+                        Collections.<com.minegit.core.model.BlockEntity>emptyList());
+        assertThrows(NullPointerException.class, () -> world.writeChunk(null, chunk));
+        assertThrows(
+                NullPointerException.class,
+                () -> world.writeChunk(DimensionId.OVERWORLD, null));
+    }
+
     // --- null guards ------------------------------------------------------------------------
 
     @Test

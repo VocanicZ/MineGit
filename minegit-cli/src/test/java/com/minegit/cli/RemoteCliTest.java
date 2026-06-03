@@ -61,6 +61,65 @@ class RemoteCliTest {
     }
 
     @Test
+    void cloneMaterializesWorldThenStatusIsClean(@TempDir Path tmp) throws Exception {
+        try (BareRepo remote = BareRepo.create(tmp.resolve("remote.git"))) {
+            // Publisher builds a one-block world and pushes it.
+            Path pub = tmp.resolve("pub");
+            assertEquals(0, run(pub, "init").code);
+            assertEquals(0, run(pub, "remote", "set", remote.fileUrl()).code);
+            assertEquals(0, run(pub, "set", "overworld", "1", "64", "2", "minecraft:stone").code);
+            assertEquals(0, run(pub, "commit", "-m", "publish").code);
+            assertEquals(0, run(pub, "push").code);
+
+            // Clone into a fresh dir.
+            Result clone = run(tmp, "clone", remote.fileUrl(), "fresh");
+            assertEquals(0, clone.code, () -> "clone failed: " + clone.err);
+
+            // The materialized world is clean against HEAD and carries the published block.
+            Path fresh = tmp.resolve("fresh");
+            Result status = run(fresh, "status");
+            assertEquals(0, status.code, () -> "status failed: " + status.err);
+            assertTrue(status.out.contains("+0/-0/~0"), () -> "expected clean tree: " + status.out);
+
+            Result diff = run(fresh, "diff", "HEAD~1", "HEAD");
+            assertTrue(
+                    diff.out.contains("minecraft:stone"),
+                    () -> "cloned history missing the block: " + diff.out);
+        }
+    }
+
+    @Test
+    void pullAppliesRemoteWorld(@TempDir Path tmp) throws Exception {
+        try (BareRepo remote = BareRepo.create(tmp.resolve("remote.git"))) {
+            Path pub = tmp.resolve("pub");
+            assertEquals(0, run(pub, "init").code);
+            assertEquals(0, run(pub, "remote", "set", remote.fileUrl()).code);
+            assertEquals(0, run(pub, "set", "overworld", "1", "64", "2", "minecraft:stone").code);
+            assertEquals(0, run(pub, "commit", "-m", "publish").code);
+            assertEquals(0, run(pub, "push").code);
+
+            // Fresh subscriber pulls the published world.
+            Path sub = tmp.resolve("sub");
+            assertEquals(0, run(sub, "init").code);
+            assertEquals(0, run(sub, "remote", "set", remote.fileUrl()).code);
+
+            Result pull = run(sub, "pull");
+            assertEquals(0, pull.code, () -> "pull failed: " + pull.err);
+            assertTrue(pull.out.contains("+1/"), () -> "pull summary missing add: " + pull.out);
+
+            // After pull the working tree is clean (live world == HEAD).
+            Result status = run(sub, "status");
+            assertTrue(status.out.contains("+0/-0/~0"), () -> "not clean after pull: " + status.out);
+        }
+    }
+
+    @Test
+    void cloneRequiresUrlAndDir(@TempDir Path tmp) {
+        Result bad = run(tmp, "clone", "only-one-arg");
+        assertTrue(bad.code != 0, "clone needs url and dir");
+    }
+
+    @Test
     void remoteSetRequiresUrl(@TempDir Path tmp) {
         Path work = tmp.resolve("work");
         run(work, "init");

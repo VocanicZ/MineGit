@@ -123,6 +123,37 @@ public final class MineGitRepo implements Closeable {
         }
     }
 
+    /**
+     * Clones the MineGit repository at {@code url} into {@code dir} and materializes a playable world
+     * from it. After JGit fetches the remote and checks out its {@code HEAD} (the {@code .mgc} working
+     * tree), every chunk in {@code HEAD} is decoded and handed to {@link WorldAdapter#writeChunk} so the
+     * live world is rebuilt from scratch. Returns an open handle bound to {@code world}.
+     *
+     * <p>Authenticates with {@code cred} (a {@link DefaultGitCredential} suffices for an unauthenticated
+     * {@code file://} remote). No Minecraft dependencies.
+     */
+    public static MineGitRepo clone(String url, Path dir, Credential cred, WorldAdapter world) {
+        Objects.requireNonNull(url, "url");
+        Objects.requireNonNull(dir, "dir");
+        Objects.requireNonNull(cred, "cred");
+        Objects.requireNonNull(world, "world");
+        try {
+            Files.createDirectories(dir);
+            org.eclipse.jgit.api.CloneCommand clone =
+                org.eclipse.jgit.api.Git.cloneRepository().setURI(url).setDirectory(dir.toFile());
+            cred.applyTo(clone);
+            Git git = clone.call();
+            MineGitRepo repo = new MineGitRepo(git, new RepoLayout(dir), world, Clock.systemUTC());
+            repo.firstChunkCommitDone = repo.headHasChunks();
+            repo.materialize();
+            return repo;
+        } catch (GitAPIException e) {
+            throw new IllegalStateException("clone failed for " + url, e);
+        } catch (IOException e) {
+            throw new UncheckedIOException("clone failed for " + url, e);
+        }
+    }
+
     /** Opens an already-initialized MineGit repository, using the system UTC clock. */
     public static MineGitRepo open(Path repoDir, WorldAdapter adapter) {
         return open(repoDir, adapter, Clock.systemUTC());
@@ -405,6 +436,29 @@ public final class MineGitRepo implements Closeable {
     }
 
     /**
+     * Fetches from {@code origin} and reverts the live world to the matching remote-tracking branch
+     * ({@code origin/<current-branch>}) — {@code pull = fetch + checkout(origin/<branch>)}. Reuses the
+     * {@link #checkout(String)} apply path: it computes {@code HEAD → origin/<branch>} as a
+     * {@link WorldDiff}, replays each chunk's {@link com.minegit.core.model.BlockChange}s onto the
+     * {@link WorldAdapter}, then fast-forwards the local ref. Returns the applied {@code WorldDiff} so a
+     * frontend can resend the affected chunks.
+     *
+     * @throws WorkingTreeDirtyException if the live world differs from {@code HEAD} (the dirty-guard,
+     *     mirroring git's refusal to clobber uncommitted work)
+     */
+    public WorldDiff pull(Credential cred) {
+        Objects.requireNonNull(cred, "cred");
+        fetch(cred);
+        String branch;
+        try {
+            branch = repository.getBranch();
+        } catch (IOException e) {
+            throw new UncheckedIOException("pull failed to resolve current branch", e);
+        }
+        return checkout("origin/" + branch);
+    }
+
+    /**
      * Pushes the current branch to {@code origin} and reports the <strong>per-ref</strong> outcome.
      * Each attempted ref maps to {@link PushResult.Status#OK OK} (advanced),
      * {@link PushResult.Status#UP_TO_DATE UP_TO_DATE} (already current), or
@@ -472,6 +526,16 @@ public final class MineGitRepo implements Closeable {
         Path levelDat = layout.levelDatPath();
         Files.createDirectories(levelDat.getParent());
         Files.write(levelDat, LEVEL_DAT_PLACEHOLDER.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Decodes every chunk in {@code HEAD} and writes it into the world adapter (clone materialize). */
+    private void materialize() {
+        for (ChunkRef ref : listChunks("HEAD")) {
+            NormalizedChunk chunk = readChunk("HEAD", ref.getDimension(), ref.getPos());
+            if (chunk != null) {
+                adapter.writeChunk(ref.getDimension(), chunk);
+            }
+        }
     }
 
     /** Serializes the live chunk to its {@code .mgc} path, or removes the file if the chunk is gone. */

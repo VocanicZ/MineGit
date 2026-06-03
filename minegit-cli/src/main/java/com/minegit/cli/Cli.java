@@ -49,7 +49,8 @@ final class Cli {
         if (args.length == 0) {
             err.println(
                     "usage: minegit "
-                            + "<init|set|commit|log|status|diff|branch|checkout|remote|fetch|push>"
+                            + "<init|set|commit|log|status|diff|branch|checkout|remote|fetch|push"
+                            + "|pull|clone>"
                             + " ...");
             return 2;
         }
@@ -79,6 +80,10 @@ final class Cli {
                     return cmdFetch(workingDir, out);
                 case "push":
                     return cmdPush(workingDir, out);
+                case "pull":
+                    return cmdPull(workingDir, out);
+                case "clone":
+                    return cmdClone(rest, workingDir, out, err);
                 default:
                     err.println("unknown command: " + command);
                     return 2;
@@ -279,6 +284,34 @@ final class Cli {
             if (result.getUpdates().isEmpty()) {
                 out.println("(nothing to push)");
             }
+        }
+        return 0;
+    }
+
+    private static int cmdPull(Path dir, PrintStream out) {
+        FakeWorldStore store = FakeWorldStore.load(dir);
+        FakeWorldAdapter adapter = store.toAdapter();
+        try (MineGitRepo repo = MineGitRepo.open(dir, adapter)) {
+            WorldDiff applied = repo.pull(DefaultGitCredential.INSTANCE);
+            store.apply(applied);
+            store.save(dir);
+            out.println("pulled origin (" + summary(applied) + ")");
+        }
+        return 0;
+    }
+
+    private static int cmdClone(String[] args, Path dir, PrintStream out, PrintStream err) {
+        if (args.length != 2) {
+            err.println("usage: minegit clone <url> <dir>");
+            return 2;
+        }
+        String url = args[0];
+        Path dest = dir.resolve(args[1]);
+        FakeWorldAdapter adapter = new FakeWorldAdapter();
+        try (MineGitRepo repo =
+                MineGitRepo.clone(url, dest, DefaultGitCredential.INSTANCE, adapter)) {
+            FakeWorldStore.fromAdapter(adapter).save(dest);
+            out.println("cloned " + url + " into " + dest.toAbsolutePath());
         }
         return 0;
     }

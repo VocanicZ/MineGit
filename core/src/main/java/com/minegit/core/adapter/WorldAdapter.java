@@ -51,4 +51,17 @@ public interface WorldAdapter {
      * affected chunks. The in-memory fake applies them immediately. No Minecraft dependencies.
      */
     void apply(DimensionId dimension, ChunkPos pos, List<BlockChange> changes);
+
+    /**
+     * Materializes an entire {@link NormalizedChunk} into the world, replacing whatever occupied that
+     * chunk before. This is the {@code clone} hook: after fetching a remote repository, the engine
+     * decodes each {@code .mgc} blob from {@code HEAD} and hands the resulting chunk here so a fresh,
+     * playable world is reconstructed from scratch.
+     *
+     * <p>Unlike {@link #apply}, which replays a sparse block delta, {@code writeChunk} carries the
+     * chunk's full block content (its {@code (cx, cz)} come from the chunk itself). A frontend writes
+     * the chunk to its world store and resends it; the in-memory fake populates its grid. No Minecraft
+     * dependencies.
+     */
+    void writeChunk(DimensionId dimension, NormalizedChunk chunk);
 }
