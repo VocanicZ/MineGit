@@ -10,6 +10,9 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.DataFormatException;
+import java.util.zip.Deflater;
+import java.util.zip.Inflater;
 
 /**
  * Deterministic compact-binary codec for the {@code .mgc} chunk format.
@@ -29,13 +32,25 @@ import java.util.Map;
  * chunk equal to {@code c} whenever {@code c} is already in canonical form (the natural form
  * produced by adapters and by this codec's own reader).
  *
- * <p>Batch 1 is uncompressed; deterministic DEFLATE is a later addition. This module performs no
- * Minecraft-specific work and has no Minecraft imports.
+ * <p>This module performs no Minecraft-specific work and has no Minecraft imports.
+ *
+ * <h2>Compression &amp; format versions</h2>
+ *
+ * <p>The body (everything after the magic and the formatVersion byte) is wrapped in <b>raw
+ * DEFLATE</b> ({@link java.util.zip.Deflater} with {@code nowrap=true}, so there is no zlib header,
+ * checksum, or timestamp) — keeping the output byte-deterministic while shrinking repetitive chunk
+ * data. {@code formatVersion} is {@value #FORMAT_VERSION}; batch-1 blobs were
+ * {@value #FORMAT_VERSION_LEGACY} (uncompressed body). {@link #deserialize} auto-detects the version
+ * and reads both, so older stores stay readable.
  *
  * <h2>Binary layout (big-endian)</h2>
  *
  * <pre>
- * magic "MGC1" (4 bytes) | formatVersion (u8) | cx (svarint) | cz (svarint) | minSection (i8)
+ * magic "MGC1" (4 bytes) | formatVersion (u8) | body
+ *   v1: body is the raw layout below, uncompressed (legacy / batch 1)
+ *   v2: body is raw-DEFLATE of the layout below
+ * --- body layout ---
+ * cx (svarint) | cz (svarint) | minSection (i8)
  * sectionArrayLen (uvarint) | biomeLen (uvarint) | biomes[]: value (uvarint)...
  * presentSectionCount (uvarint)
  * per present section (ascending array index):
@@ -49,18 +64,48 @@ import java.util.Map;
 public final class MgcCodec {
 
     private static final byte[] MAGIC = {'M', 'G', 'C', '1'};
-    private static final int FORMAT_VERSION = 1;
+
+    /** Legacy batch-1 version: body stored uncompressed. Still readable by {@link #deserialize}. */
+    static final int FORMAT_VERSION_LEGACY = 1;
+
+    /** Current version: body stored as raw DEFLATE. */
+    static final int FORMAT_VERSION = 2;
 
     private MgcCodec() {}
 
-    /** Serializes a chunk to its canonical {@code .mgc} byte representation. */
+    /** Serializes a chunk to its canonical, DEFLATE-compressed {@code .mgc} byte representation. */
     public static byte[] serialize(NormalizedChunk chunk) {
         if (chunk == null) {
             throw new NullPointerException("chunk");
         }
-        ByteArrayOutputStream out = new ByteArrayOutputStream(1024);
+        byte[] body = encodeBody(chunk);
+        ByteArrayOutputStream out = new ByteArrayOutputStream(body.length / 2 + 16);
         out.write(MAGIC, 0, MAGIC.length);
         writeU8(out, FORMAT_VERSION);
+        byte[] deflated = deflate(body);
+        out.write(deflated, 0, deflated.length);
+        return out.toByteArray();
+    }
+
+    /**
+     * Serializes a chunk in the legacy (version 1, uncompressed) layout. Kept package-private so the
+     * back-compatibility path has explicit test coverage; production writes use {@link #serialize}.
+     */
+    static byte[] serializeLegacyV1(NormalizedChunk chunk) {
+        if (chunk == null) {
+            throw new NullPointerException("chunk");
+        }
+        byte[] body = encodeBody(chunk);
+        ByteArrayOutputStream out = new ByteArrayOutputStream(body.length + 16);
+        out.write(MAGIC, 0, MAGIC.length);
+        writeU8(out, FORMAT_VERSION_LEGACY);
+        out.write(body, 0, body.length);
+        return out.toByteArray();
+    }
+
+    /** Writes the version-independent body (everything after magic + formatVersion). */
+    private static byte[] encodeBody(NormalizedChunk chunk) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(1024);
         writeSVarint(out, chunk.getCx());
         writeSVarint(out, chunk.getCz());
         writeI8(out, chunk.getMinSection());
@@ -107,16 +152,24 @@ public final class MgcCodec {
         if (bytes == null) {
             throw new NullPointerException("bytes");
         }
-        ByteReader in = new ByteReader(bytes);
+        ByteReader header = new ByteReader(bytes);
         for (byte expected : MAGIC) {
-            if (in.readByte() != expected) {
+            if (header.readByte() != expected) {
                 throw new IllegalArgumentException("bad magic: not an .mgc blob");
             }
         }
-        int version = in.readU8();
-        if (version != FORMAT_VERSION) {
+        int version = header.readU8();
+        byte[] rawBody = header.rest();
+        byte[] body;
+        if (version == FORMAT_VERSION_LEGACY) {
+            body = rawBody;
+        } else if (version == FORMAT_VERSION) {
+            body = inflate(rawBody);
+        } else {
             throw new IllegalArgumentException("unsupported .mgc formatVersion: " + version);
         }
+
+        ByteReader in = new ByteReader(body);
         int cx = in.readSVarint();
         int cz = in.readSVarint();
         int minSection = in.readI8();
@@ -319,6 +372,54 @@ public final class MgcCodec {
         return out;
     }
 
+    // ---- DEFLATE ------------------------------------------------------------------------------
+
+    /**
+     * Raw DEFLATE ({@code nowrap=true} → no zlib header/checksum, no embedded timestamp). For a
+     * fixed input, level, and strategy the byte output is deterministic, preserving the
+     * {@code serialize(x) == serialize(x)} invariant.
+     */
+    private static byte[] deflate(byte[] data) {
+        Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION, true);
+        try {
+            deflater.setInput(data);
+            deflater.finish();
+            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(32, data.length / 2));
+            byte[] buf = new byte[8192];
+            while (!deflater.finished()) {
+                int n = deflater.deflate(buf);
+                out.write(buf, 0, n);
+            }
+            return out.toByteArray();
+        } finally {
+            deflater.end();
+        }
+    }
+
+    /** Inverse of {@link #deflate}. */
+    private static byte[] inflate(byte[] data) {
+        Inflater inflater = new Inflater(true);
+        try {
+            inflater.setInput(data);
+            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(64, data.length * 2));
+            byte[] buf = new byte[8192];
+            while (!inflater.finished()) {
+                int n = inflater.inflate(buf);
+                if (n == 0) {
+                    if (inflater.finished() || inflater.needsDictionary() || inflater.needsInput()) {
+                        break;
+                    }
+                }
+                out.write(buf, 0, n);
+            }
+            return out.toByteArray();
+        } catch (DataFormatException e) {
+            throw new IllegalArgumentException("corrupt DEFLATE body in .mgc blob", e);
+        } finally {
+            inflater.end();
+        }
+    }
+
     // ---- primitive writers --------------------------------------------------------------------
 
     private static void writeU8(ByteArrayOutputStream out, int v) {
@@ -382,6 +483,14 @@ public final class MgcCodec {
                 throw new IllegalArgumentException("unexpected end of .mgc blob");
             }
             return buf[pos++];
+        }
+
+        /** Returns all not-yet-consumed bytes (used to split the header from the body). */
+        byte[] rest() {
+            byte[] out = new byte[buf.length - pos];
+            System.arraycopy(buf, pos, out, 0, out.length);
+            pos = buf.length;
+            return out;
         }
 
         int readU8() {
