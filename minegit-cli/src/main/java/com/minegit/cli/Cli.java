@@ -5,7 +5,9 @@ import com.minegit.core.fake.FakeWorldAdapter;
 import com.minegit.core.git.Author;
 import com.minegit.core.git.BranchRef;
 import com.minegit.core.git.CommitInfo;
+import com.minegit.core.git.DefaultGitCredential;
 import com.minegit.core.git.MineGitRepo;
+import com.minegit.core.git.PushResult;
 import com.minegit.core.model.BlockChange;
 import com.minegit.core.model.BlockState;
 import com.minegit.core.model.ChunkDiff;
@@ -45,7 +47,10 @@ final class Cli {
      */
     static int run(String[] args, Path workingDir, PrintStream out, PrintStream err) {
         if (args.length == 0) {
-            err.println("usage: minegit <init|set|commit|log|status|diff|branch|checkout> ...");
+            err.println(
+                    "usage: minegit "
+                            + "<init|set|commit|log|status|diff|branch|checkout|remote|fetch|push>"
+                            + " ...");
             return 2;
         }
         String command = args[0];
@@ -68,6 +73,12 @@ final class Cli {
                     return cmdBranch(rest, workingDir, out, err);
                 case "checkout":
                     return cmdCheckout(rest, workingDir, out, err);
+                case "remote":
+                    return cmdRemote(rest, workingDir, out, err);
+                case "fetch":
+                    return cmdFetch(workingDir, out);
+                case "push":
+                    return cmdPush(workingDir, out);
                 default:
                     err.println("unknown command: " + command);
                     return 2;
@@ -231,6 +242,43 @@ final class Cli {
             store.apply(applied);
             store.save(dir);
             out.println("checked out " + ref + " (" + summary(applied) + ")");
+        }
+        return 0;
+    }
+
+    private static int cmdRemote(String[] args, Path dir, PrintStream out, PrintStream err) {
+        if (args.length != 2 || !"set".equals(args[0])) {
+            err.println("usage: minegit remote set <url>");
+            return 2;
+        }
+        String url = args[1];
+        FakeWorldStore store = FakeWorldStore.load(dir);
+        try (MineGitRepo repo = MineGitRepo.open(dir, store.toAdapter())) {
+            repo.remoteSet(url);
+            out.println("remote origin set to " + url);
+        }
+        return 0;
+    }
+
+    private static int cmdFetch(Path dir, PrintStream out) {
+        FakeWorldStore store = FakeWorldStore.load(dir);
+        try (MineGitRepo repo = MineGitRepo.open(dir, store.toAdapter())) {
+            repo.fetch(DefaultGitCredential.INSTANCE);
+            out.println("fetched origin");
+        }
+        return 0;
+    }
+
+    private static int cmdPush(Path dir, PrintStream out) {
+        FakeWorldStore store = FakeWorldStore.load(dir);
+        try (MineGitRepo repo = MineGitRepo.open(dir, store.toAdapter())) {
+            PushResult result = repo.push(DefaultGitCredential.INSTANCE);
+            for (PushResult.RefUpdate u : result.getUpdates()) {
+                out.println(u.getRemoteRef() + " " + u.getStatus());
+            }
+            if (result.getUpdates().isEmpty()) {
+                out.println("(nothing to push)");
+            }
         }
         return 0;
     }
