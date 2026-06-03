@@ -244,6 +244,41 @@ public final class MineGitRepo implements Closeable {
         }
     }
 
+    /**
+     * Lists every chunk present in the tree of revision {@code rev} by walking it for {@code .mgc}
+     * blobs and recovering each {@code (dimension, pos)} from its MGRF path. Returns an empty set if
+     * {@code rev} resolves to nothing. Drives the diff engine's tree-backed {@link ChunkSource},
+     * which needs the position set to take the union with another source.
+     */
+    public Set<ChunkRef> listChunks(String rev) {
+        Objects.requireNonNull(rev, "rev");
+        try {
+            ObjectId commitId = repository.resolve(rev);
+            if (commitId == null) {
+                return Collections.emptySet();
+            }
+            java.util.Set<ChunkRef> out = new java.util.HashSet<ChunkRef>();
+            try (RevWalk walk = new RevWalk(repository)) {
+                RevTree tree = walk.parseCommit(commitId).getTree();
+                try (TreeWalk tw = new TreeWalk(repository)) {
+                    tw.addTree(tree);
+                    tw.setRecursive(true);
+                    while (tw.next()) {
+                        String path = tw.getPathString();
+                        if (path.endsWith(".mgc")) {
+                            RepoLayout.ChunkRef parsed =
+                                layout.parseChunkPath(java.nio.file.Paths.get(path));
+                            out.add(new ChunkRef(parsed.getDimension(), parsed.getPos()));
+                        }
+                    }
+                }
+            }
+            return out;
+        } catch (IOException e) {
+            throw new UncheckedIOException("listChunks failed", e);
+        }
+    }
+
     /** The MGRF layout this repository writes to. */
     public RepoLayout getLayout() {
         return layout;
