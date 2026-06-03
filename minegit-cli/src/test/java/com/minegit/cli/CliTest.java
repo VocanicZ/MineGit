@@ -126,6 +126,20 @@ class CliTest {
     }
 
     @Test
+    void branchCreateThenListShowsLocalBranches(@TempDir Path dir) {
+        assertEquals(0, run(dir, "init").code);
+
+        Result create = run(dir, "branch", "feature");
+        assertEquals(0, create.code, () -> "branch create failed: " + create.err);
+        assertTrue(create.out.contains("feature"), () -> "create output missing name: " + create.out);
+
+        Result list = run(dir, "branch");
+        assertEquals(0, list.code, () -> "branch list failed: " + list.err);
+        assertTrue(list.out.contains("feature"), () -> "list missing feature: " + list.out);
+        assertTrue(list.out.contains("master"), () -> "list missing default branch: " + list.out);
+    }
+
+    @Test
     void unknownCommandIsAnError(@TempDir Path dir) {
         Result r = run(dir, "frobnicate");
         assertNotEquals(0, r.code, "unknown command should be non-zero exit");

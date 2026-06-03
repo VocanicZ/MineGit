@@ -3,6 +3,7 @@ package com.minegit.cli;
 import com.minegit.core.diff.WorldDiffer;
 import com.minegit.core.fake.FakeWorldAdapter;
 import com.minegit.core.git.Author;
+import com.minegit.core.git.BranchRef;
 import com.minegit.core.git.CommitInfo;
 import com.minegit.core.git.MineGitRepo;
 import com.minegit.core.model.BlockChange;
@@ -44,7 +45,7 @@ final class Cli {
      */
     static int run(String[] args, Path workingDir, PrintStream out, PrintStream err) {
         if (args.length == 0) {
-            err.println("usage: minegit <init|set|commit|log|status|diff> ...");
+            err.println("usage: minegit <init|set|commit|log|status|diff|branch> ...");
             return 2;
         }
         String command = args[0];
@@ -63,6 +64,8 @@ final class Cli {
                     return cmdStatus(workingDir, out);
                 case "diff":
                     return cmdDiff(rest, workingDir, out, err);
+                case "branch":
+                    return cmdBranch(rest, workingDir, out, err);
                 default:
                     err.println("unknown command: " + command);
                     return 2;
@@ -177,6 +180,27 @@ final class Cli {
                 return 2;
             }
             printDiff(diff, out);
+        }
+        return 0;
+    }
+
+    private static int cmdBranch(String[] args, Path dir, PrintStream out, PrintStream err) {
+        if (args.length > 1) {
+            err.println("usage: minegit branch [name]");
+            return 2;
+        }
+        FakeWorldStore store = FakeWorldStore.load(dir);
+        try (MineGitRepo repo = MineGitRepo.open(dir, store.toAdapter())) {
+            if (args.length == 1) {
+                BranchRef ref = repo.branch(args[0]);
+                out.println("created branch " + ref.getName());
+                return 0;
+            }
+            List<BranchRef> branches = new ArrayList<BranchRef>(repo.branches());
+            branches.sort(Comparator.comparing(BranchRef::isRemote).thenComparing(BranchRef::getName));
+            for (BranchRef b : branches) {
+                out.println(b.isRemote() ? "remotes/" + b.getName() : b.getName());
+            }
         }
         return 0;
     }

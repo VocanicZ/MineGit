@@ -16,9 +16,13 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.PersonIdent;
+import org.eclipse.jgit.lib.RefUpdate;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -138,6 +142,53 @@ class MineGitRepoTest {
 
             assertNull(repo.readChunk("HEAD", DimensionId.OVERWORLD, new ChunkPos(99, 99)),
                 "absent chunk decodes to null");
+        }
+    }
+
+    @Test
+    void branch_createsLocalBranchAtHead(@TempDir Path dir) throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            BranchRef ref = repo.branch("feature");
+            assertEquals("feature", ref.getName());
+            assertEquals(false, ref.isRemote());
+        }
+
+        // The new ref exists in the object DB and points at the same commit as HEAD.
+        try (Git git = Git.open(dir.toFile())) {
+            ObjectId head = git.getRepository().resolve("HEAD");
+            ObjectId feature = git.getRepository().resolve("refs/heads/feature");
+            assertNotNull(feature, "branch ref created");
+            assertEquals(head, feature, "branch points at HEAD");
+        }
+    }
+
+    @Test
+    void branches_distinguishesLocalFromRemoteTracking(@TempDir Path dir) throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            repo.branch("feature");
+
+            // Forge a remote-tracking ref directly in the object DB (no network).
+            try (Git git = Git.open(dir.toFile())) {
+                ObjectId head = git.getRepository().resolve("HEAD");
+                RefUpdate ru = git.getRepository().updateRef("refs/remotes/origin/main");
+                ru.setNewObjectId(head);
+                ru.forceUpdate();
+            }
+
+            List<BranchRef> all = repo.branches();
+            Set<String> local = new HashSet<String>();
+            Set<String> remote = new HashSet<String>();
+            for (BranchRef b : all) {
+                (b.isRemote() ? remote : local).add(b.getName());
+            }
+
+            assertTrue(local.contains("feature"), "local branch listed: " + all);
+            assertTrue(local.contains("master"), "default local branch listed: " + all);
+            assertTrue(remote.contains("origin/main"), "remote-tracking branch listed: " + all);
+            assertTrue(remote.contains("feature") == false, "feature is not remote: " + all);
+            assertTrue(local.contains("origin/main") == false, "origin/main is not local: " + all);
         }
     }
 }
