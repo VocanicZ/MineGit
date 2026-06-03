@@ -3,13 +3,17 @@ package com.minegit.core.git;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.minegit.core.diff.WorldDiffer;
 import com.minegit.core.fake.FakeWorldAdapter;
 import com.minegit.core.model.BlockState;
 import com.minegit.core.model.ChunkPos;
 import com.minegit.core.model.DimensionId;
 import com.minegit.core.model.NormalizedChunk;
+import com.minegit.core.model.WorldDiff;
 import com.minegit.core.repo.RepoLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -189,6 +193,68 @@ class MineGitRepoTest {
             assertTrue(remote.contains("origin/main"), "remote-tracking branch listed: " + all);
             assertTrue(remote.contains("feature") == false, "feature is not remote: " + all);
             assertTrue(local.contains("origin/main") == false, "origin/main is not local: " + all);
+        }
+    }
+
+    @Test
+    void checkout_appliesHeadToTargetDelta_andMovesRef(@TempDir Path dir) throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        BlockState dirt = new BlockState("minecraft:dirt");
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, stone);
+            repo.commit("A", "Steve");
+            world.setBlock(DimensionId.OVERWORLD, 100, 64, 0, dirt);
+            repo.commit("B", "Steve");
+
+            // Revert the world to commit A (one commit back).
+            WorldDiff applied = repo.checkout("HEAD~1");
+
+            // The dirt placed in B was removed from the live world; the stone from A remains.
+            assertSame(BlockState.AIR, world.getBlock(DimensionId.OVERWORLD, 100, 64, 0));
+            assertEquals(stone, world.getBlock(DimensionId.OVERWORLD, 0, 64, 0));
+
+            // The returned WorldDiff is exactly the applied delta (one removal).
+            assertEquals(1, applied.getRemoved(), "one block removed by the revert");
+            assertEquals(0, applied.getAdded());
+            assertEquals(0, applied.getChanged());
+
+            // The local ref moved: B is no longer on the current branch.
+            List<CommitInfo> log = repo.log();
+            assertEquals(2, log.size(), "branch reset to A (init + A)");
+            assertEquals("A", log.get(0).getMessage());
+
+            // The working tree is now clean against the new HEAD.
+            WorldDiff afterCheckout = WorldDiffer.diffWorkingTree(repo, world);
+            assertTrue(afterCheckout.getDimensions().isEmpty(), "clean after checkout");
+        }
+    }
+
+    @Test
+    void checkout_refusesDirtyTree_unlessForced(@TempDir Path dir) throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        BlockState dirt = new BlockState("minecraft:dirt");
+        BlockState glass = new BlockState("minecraft:glass");
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, stone);
+            repo.commit("A", "Steve");
+            world.setBlock(DimensionId.OVERWORLD, 100, 64, 0, dirt);
+            repo.commit("B", "Steve");
+
+            // Uncommitted live edit makes the working tree dirty.
+            world.setBlock(DimensionId.OVERWORLD, 200, 64, 0, glass);
+
+            assertThrows(
+                    WorkingTreeDirtyException.class,
+                    () -> repo.checkout("HEAD~1"),
+                    "dirty tree refused without force");
+
+            // Forced checkout bypasses the guard and applies HEAD -> target anyway.
+            WorldDiff applied = repo.checkout("HEAD~1", true);
+            assertEquals(1, applied.getRemoved(), "dirt removed by the forced revert");
+            List<CommitInfo> log = repo.log();
+            assertEquals("A", log.get(0).getMessage(), "ref moved to A under force");
         }
     }
 }

@@ -1,8 +1,11 @@
 package com.minegit.cli;
 
 import com.minegit.core.fake.FakeWorldAdapter;
+import com.minegit.core.model.BlockChange;
 import com.minegit.core.model.BlockState;
+import com.minegit.core.model.ChunkDiff;
 import com.minegit.core.model.DimensionId;
+import com.minegit.core.model.WorldDiff;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -103,6 +106,28 @@ final class FakeWorldStore {
                     Json.write(root).getBytes(StandardCharsets.UTF_8));
         } catch (IOException e) {
             throw new UncheckedIOException("failed to write " + FILE_NAME, e);
+        }
+    }
+
+    /**
+     * Mirrors a {@code checkout}/{@code pull} delta into the persistent store so {@code world.json}
+     * stays in lock-step with the in-memory adapter: an {@link BlockChange.Kind#ADD}/{@code CHANGE}
+     * records the new block id, a {@link BlockChange.Kind#REMOVE} deletes the key (back to air).
+     */
+    void apply(WorldDiff diff) {
+        Objects.requireNonNull(diff, "diff");
+        for (Map.Entry<DimensionId, List<ChunkDiff>> e : diff.getDimensions().entrySet()) {
+            String dim = e.getKey().getId();
+            for (ChunkDiff chunkDiff : e.getValue()) {
+                for (BlockChange c : chunkDiff.getChanges()) {
+                    BlockKey key = new BlockKey(dim, c.getX(), c.getY(), c.getZ());
+                    if (c.getNewState() != null) {
+                        blocks.put(key, c.getNewState().getId());
+                    } else {
+                        blocks.remove(key);
+                    }
+                }
+            }
         }
     }
 

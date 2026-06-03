@@ -1,8 +1,10 @@
 package com.minegit.core.adapter;
 
+import com.minegit.core.model.BlockChange;
 import com.minegit.core.model.ChunkPos;
 import com.minegit.core.model.DimensionId;
 import com.minegit.core.model.NormalizedChunk;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -37,4 +39,16 @@ public interface WorldAdapter {
      * incremental commits.
      */
     Set<ChunkRef> drainDirty();
+
+    /**
+     * Applies a chunk's worth of {@link BlockChange}s to the world, mutating it toward a checkout
+     * target. For each change the world is set to the change's {@linkplain BlockChange#getNewState()
+     * new state} (an {@link BlockChange.Kind#ADD} or {@link BlockChange.Kind#CHANGE}) or back to air
+     * (a {@link BlockChange.Kind#REMOVE}). This is the {@code checkout}/{@code pull} apply hook: the
+     * engine computes {@code HEAD → target} as block changes and replays them here, per chunk.
+     *
+     * <p>A frontend performs this on the main thread, throttled to N chunks per tick, and resends the
+     * affected chunks. The in-memory fake applies them immediately. No Minecraft dependencies.
+     */
+    void apply(DimensionId dimension, ChunkPos pos, List<BlockChange> changes);
 }

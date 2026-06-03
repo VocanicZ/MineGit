@@ -140,6 +140,45 @@ class CliTest {
     }
 
     @Test
+    void checkoutRevertsWorldToPriorCommit(@TempDir Path dir) {
+        assertEquals(0, run(dir, "init").code);
+        run(dir, "set", "overworld", "0", "64", "0", "minecraft:stone");
+        run(dir, "commit", "-m", "A");
+        run(dir, "set", "overworld", "100", "64", "0", "minecraft:dirt");
+        run(dir, "commit", "-m", "B");
+
+        Result checkout = run(dir, "checkout", "HEAD~1");
+        assertEquals(0, checkout.code, () -> "checkout failed: " + checkout.err);
+
+        // The dirt placed in B is gone; the working tree is clean against the reverted HEAD.
+        Result status = run(dir, "status");
+        assertEquals("+0/-0/~0", status.out.trim(), () -> "expected clean status: " + status.out);
+
+        // The local ref moved: only init + A remain on the branch.
+        Result log = run(dir, "log");
+        assertTrue(log.out.contains("A"), () -> "log missing A: " + log.out);
+        assertTrue(!log.out.contains(" B"), () -> "B should be gone from branch: " + log.out);
+    }
+
+    @Test
+    void checkoutRefusesDirtyTreeUnlessForced(@TempDir Path dir) {
+        assertEquals(0, run(dir, "init").code);
+        run(dir, "set", "overworld", "0", "64", "0", "minecraft:stone");
+        run(dir, "commit", "-m", "A");
+        run(dir, "set", "overworld", "100", "64", "0", "minecraft:dirt");
+        run(dir, "commit", "-m", "B");
+
+        // Uncommitted edit makes the working tree dirty.
+        run(dir, "set", "overworld", "200", "64", "0", "minecraft:glass");
+
+        Result refused = run(dir, "checkout", "HEAD~1");
+        assertNotEquals(0, refused.code, "dirty checkout should be refused");
+
+        Result forced = run(dir, "checkout", "HEAD~1", "--force");
+        assertEquals(0, forced.code, () -> "forced checkout failed: " + forced.err);
+    }
+
+    @Test
     void unknownCommandIsAnError(@TempDir Path dir) {
         Result r = run(dir, "frobnicate");
         assertNotEquals(0, r.code, "unknown command should be non-zero exit");

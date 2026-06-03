@@ -45,7 +45,7 @@ final class Cli {
      */
     static int run(String[] args, Path workingDir, PrintStream out, PrintStream err) {
         if (args.length == 0) {
-            err.println("usage: minegit <init|set|commit|log|status|diff|branch> ...");
+            err.println("usage: minegit <init|set|commit|log|status|diff|branch|checkout> ...");
             return 2;
         }
         String command = args[0];
@@ -66,6 +66,8 @@ final class Cli {
                     return cmdDiff(rest, workingDir, out, err);
                 case "branch":
                     return cmdBranch(rest, workingDir, out, err);
+                case "checkout":
+                    return cmdCheckout(rest, workingDir, out, err);
                 default:
                     err.println("unknown command: " + command);
                     return 2;
@@ -201,6 +203,34 @@ final class Cli {
             for (BranchRef b : branches) {
                 out.println(b.isRemote() ? "remotes/" + b.getName() : b.getName());
             }
+        }
+        return 0;
+    }
+
+    private static int cmdCheckout(String[] args, Path dir, PrintStream out, PrintStream err) {
+        String ref = null;
+        boolean force = false;
+        for (String a : args) {
+            if ("--force".equals(a) || "-f".equals(a)) {
+                force = true;
+            } else if (ref == null) {
+                ref = a;
+            } else {
+                err.println("usage: minegit checkout <ref> [--force]");
+                return 2;
+            }
+        }
+        if (ref == null) {
+            err.println("usage: minegit checkout <ref> [--force]");
+            return 2;
+        }
+        FakeWorldStore store = FakeWorldStore.load(dir);
+        FakeWorldAdapter adapter = store.toAdapter();
+        try (MineGitRepo repo = MineGitRepo.open(dir, adapter)) {
+            WorldDiff applied = repo.checkout(ref, force);
+            store.apply(applied);
+            store.save(dir);
+            out.println("checked out " + ref + " (" + summary(applied) + ")");
         }
         return 0;
     }
