@@ -214,10 +214,13 @@ final class Cli {
                 out.println("created branch " + ref.getName());
                 return 0;
             }
+            String current = repo.currentBranch();
             List<BranchRef> branches = new ArrayList<BranchRef>(repo.branches());
             branches.sort(Comparator.comparing(BranchRef::isRemote).thenComparing(BranchRef::getName));
             for (BranchRef b : branches) {
-                out.println(b.isRemote() ? "remotes/" + b.getName() : b.getName());
+                String label = b.isRemote() ? "remotes/" + b.getName() : b.getName();
+                boolean isCurrent = !b.isRemote() && b.getName().equals(current);
+                out.println((isCurrent ? "* " : "  ") + label);
             }
         }
         return 0;

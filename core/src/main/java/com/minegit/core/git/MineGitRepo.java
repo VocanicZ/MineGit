@@ -332,6 +332,18 @@ public final class MineGitRepo implements Closeable {
     }
 
     /**
+     * The short name of the branch {@code HEAD} currently points at (e.g. {@code "master"}). If
+     * {@code HEAD} is detached this is the abbreviated commit SHA rather than a branch name.
+     */
+    public String currentBranch() {
+        try {
+            return repository.getBranch();
+        } catch (IOException e) {
+            throw new UncheckedIOException("failed to resolve current branch", e);
+        }
+    }
+
+    /**
      * Lists every branch ref: local branches ({@code refs/heads/*}) and remote-tracking branches
      * ({@code refs/remotes/*}), tagged <strong>distinctly</strong> via {@link BranchRef#isRemote()}.
      * A remote-tracking ref keeps its remote-qualified name (e.g. {@code "origin/main"}) so it never
