@@ -183,4 +183,20 @@ class CliTest {
         Result r = run(dir, "frobnicate");
         assertNotEquals(0, r.code, "unknown command should be non-zero exit");
     }
+
+    @Test
+    void diffWithUnknownRefFailsLoudly(@TempDir Path dir) {
+        assertEquals(0, run(dir, "init").code);
+        assertEquals(0, run(dir, "set", "overworld", "0", "64", "0", "minecraft:stone").code);
+        assertEquals(0, run(dir, "commit", "-m", "first", "--author", "Steve:uuid-steve").code);
+
+        Result r = run(dir, "diff", "HEAD", "nonexistent");
+        assertNotEquals(0, r.code, "an unresolvable ref must be a non-zero exit");
+        assertTrue(
+                r.err.contains("unknown ref") && r.err.contains("nonexistent"),
+                () -> "stderr should name the unresolvable ref: " + r.err);
+        assertTrue(
+                r.out.isEmpty(),
+                () -> "no diff should be printed when a ref is unresolvable: " + r.out);
+    }
 }

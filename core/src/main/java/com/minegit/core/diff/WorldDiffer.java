@@ -57,6 +57,10 @@ public final class WorldDiffer {
         Objects.requireNonNull(repo, "repo");
         Objects.requireNonNull(revA, "revA");
         Objects.requireNonNull(revB, "revB");
+        // Fail loudly on an unresolvable ref instead of letting it collapse to an empty tree and
+        // emit a misleading "everything removed" diff.
+        repo.requireRef(revA);
+        repo.requireRef(revB);
         return diff(ChunkSources.tree(repo, revA), ChunkSources.tree(repo, revB));
     }
 
