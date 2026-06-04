@@ -47,6 +47,10 @@ dependencies {
     testImplementation(platform("org.junit:junit-bom:5.10.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    // The core engine's in-memory FakeWorldAdapter drives headless init/status/log tests for the
+    // command service, so the git path is exercised without booting a Minecraft server.
+    testImplementation(testFixtures(project(":core")))
 }
 
 tasks.named<Test>("test") {
