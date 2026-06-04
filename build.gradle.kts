@@ -1,7 +1,23 @@
 // Root build for the MineGit monorepo.
-// No Minecraft dependencies anywhere — this is the platform-agnostic engine tree.
+//
+// Two trees live here:
+//   * the engine — `core` / `protocol` / `minegit-cli` / `plugin` — Java 8 bytecode, NO Minecraft.
+//   * the Architectury mod — `mod:common` / `mod:fabric` / `mod:neoforge` — Java 21, MC 1.21.11.
+// The Architectury subprojects configure themselves (loom + architectury-plugin); the shared
+// engine config below applies ONLY to the engine projects so it never fights loom's own setup.
+
+plugins {
+    // On the classpath for the mod subprojects; never applied to the root or the engine tree.
+    id("architectury-plugin") version "3.5.166" apply false
+    id("dev.architectury.loom") version "1.14.475" apply false
+}
+
+// Engine projects: Java 8, JUnit 5, Maven Central only. The mod subprojects are excluded.
+val engineProjects = setOf("core", "protocol", "minegit-cli", "plugin")
 
 subprojects {
+    if (name !in engineProjects) return@subprojects
+
     apply(plugin = "java")
 
     group = "com.minegit"

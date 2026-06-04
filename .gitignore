@@ -2,6 +2,10 @@
 build/
 !gradle/wrapper/gradle-wrapper.jar
 
+# Loom dev-launch run directories (mod:fabric / mod:neoforge runClient/runServer)
+run/
+mod/*/run/
+
 # IDE
 .idea/
 *.iml
