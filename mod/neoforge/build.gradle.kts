@@ -61,6 +61,31 @@ dependencies {
     }
     shadowBundle(project(":core"), engineExcludes)
     shadowBundle(project(":protocol"), engineExcludes)
+
+    // Dev/GameTest runs use exploded classes, not the shadow jar, so the engine + JGit must be on
+    // the run's runtime classpath too (production gets them relocated via shadowBundle). slf4j is
+    // excluded so JGit binds to the slf4j Minecraft already ships in dev rather than duplicating it.
+    runtimeOnly(project(":core"), engineExcludes)
+    runtimeOnly(project(":protocol"), engineExcludes)
+}
+
+// Headless GameTest run (Spec D §6, issue #64): boots NeoForge's dedicated GameTest server, which
+// runs every registered test then exits non-zero on failure. Invoke with
+// `./gradlew :mod:neoforge:runGameTestServer`. Mirrors NeoForge's userdev `gameTestServer` run.
+loom {
+    runs {
+        create("gameTestServer") {
+            server()
+            mainClass.set("net.neoforged.fml.startup.GameTestServer")
+            property("neoforge.enableGameTest", "true")
+            property("neoforge.enabledGameTestNamespaces", modId)
+            vmArgs(
+                "--add-opens", "java.base/java.lang.invoke=ALL-UNNAMED",
+                "--add-exports", "jdk.naming.dns/com.sun.jndi.dns=java.naming",
+            )
+            runDir("build/gametest")
+        }
+    }
 }
 
 tasks {

@@ -22,3 +22,38 @@ jobs:
 
       - name: Build (compile + test)
         run: ./gradlew build --no-daemon --console=plain
+
+  game-tests:
+    name: GameTests (Fabric + NeoForge)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Headless place->commit->mutate->checkout->assert-reverted loop on a real server level
+      # for both loaders (Spec D §6, issue #64). Each task boots a dedicated GameTest server,
+      # runs every registered test, and exits non-zero if any test fails.
+      - name: Fabric GameTests
+        run: ./gradlew :mod:fabric:runGametest --no-daemon --console=plain
+
+      - name: NeoForge GameTests
+        run: ./gradlew :mod:neoforge:runGameTestServer --no-daemon --console=plain
+
+      - name: Upload GameTest reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gametest-reports
+          path: |
+            mod/fabric/build/junit.xml
+            mod/neoforge/build/gametest/**/*.xml
+          if-no-files-found: ignore
