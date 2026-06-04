@@ -2,9 +2,12 @@ package com.minegit.plugin.command;
 
 import com.minegit.core.adapter.WorldAdapter;
 import com.minegit.core.diff.WorldDiffer;
+import com.minegit.core.git.Author;
 import com.minegit.core.git.CommitInfo;
 import com.minegit.core.git.MineGitRepo;
 import com.minegit.core.model.WorldDiff;
+import com.minegit.plugin.world.Actor;
+import com.minegit.plugin.world.CommitService;
 import com.minegit.plugin.world.WorldRepoRegistry;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -28,9 +31,10 @@ import org.bukkit.entity.Player;
  *
  * <p>Routes the first argument to a subcommand, enforcing per-subcommand permissions
  * ({@link #PERM_USE} for read/commit, {@link #PERM_ADMIN} for destructive ops). This slice
- * implements the read-only/setup trio — {@code init}, {@code status}, {@code log} — plus tab
- * completion of subcommand names; {@code commit}/{@code diff}/{@code checkout} land in follow-up
- * issues by adding a case here and an entry to {@link #PERMISSIONS}.
+ * implements {@code init}, {@code status}, {@code log} (#45) and {@code commit} (#46) — the latter
+ * hopping threads via {@link CommitService} (main-thread reads, async git) — plus tab completion of
+ * subcommand names; {@code diff}/{@code checkout} land in follow-up issues by adding a case here and
+ * an entry to {@link #PERMISSIONS}.
  *
  * <p>Kept Bukkit-light and dependency-injected (registry, adapter factory, clock, messaging) so it
  * is unit-testable without booting a server: the live plugin wires the real collaborators at enable.
@@ -52,6 +56,7 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         Map<String, String> p = new LinkedHashMap<String, String>();
         p.put("init", PERM_USE);
         p.put("status", PERM_USE);
+        p.put("commit", PERM_USE);
         p.put("log", PERM_USE);
         PERMISSIONS = p;
     }
@@ -60,16 +65,19 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
     private final Function<World, WorldAdapter> adapters;
     private final Clock clock;
     private final MessageService messages;
+    private final CommitService commitService;
 
     public MineGitCommand(
             WorldRepoRegistry repos,
             Function<World, WorldAdapter> adapters,
             Clock clock,
-            MessageService messages) {
+            MessageService messages,
+            CommitService commitService) {
         this.repos = Objects.requireNonNull(repos, "repos");
         this.adapters = Objects.requireNonNull(adapters, "adapters");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.messages = Objects.requireNonNull(messages, "messages");
+        this.commitService = Objects.requireNonNull(commitService, "commitService");
     }
 
     @Override
@@ -94,6 +102,8 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
                 return doInit(sender);
             case "status":
                 return doStatus(sender);
+            case "commit":
+                return doCommit(sender, args);
             case "log":
                 return doLog(sender);
             default:
@@ -162,6 +172,54 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
+    private boolean doCommit(CommandSender sender, String[] args) {
+        Player player = requirePlayer(sender);
+        if (player == null) {
+            return true;
+        }
+        String message = parseMessage(args);
+        if (message == null) {
+            messages.send(sender,
+                    ChatColor.RED + "Usage: " + ChatColor.WHITE + "/mg commit -m \"message\"");
+            return true;
+        }
+        World world = player.getWorld();
+        String name = world.getName();
+        if (!repos.isBound(name)) {
+            messages.send(sender, noRepo(name));
+            return true;
+        }
+        WorldAdapter live = adapters.apply(world);
+        Path path = repos.repoPath(name);
+        Author author = authorFor(Actor.fromPlayer(player));
+        messages.send(sender, ChatColor.GRAY + "Committing '" + name + "'…");
+        // Reads hop to the main thread (throttled), git runs async, completion lands back on main.
+        commitService.commit(path, live, clock, message, author,
+                result -> reportCommit(sender, name, result));
+        return true;
+    }
+
+    /** Renders the async commit outcome to the player (Spec B §6: "message on completion"). */
+    private void reportCommit(CommandSender sender, String world, CommitService.Result result) {
+        if (result.isError()) {
+            messages.send(sender,
+                    ChatColor.RED + "Commit failed for '" + world + "': "
+                            + result.error().getMessage());
+            return;
+        }
+        CommitInfo commit = result.commit();
+        if (commit == null) {
+            messages.send(sender,
+                    ChatColor.YELLOW + "Nothing to commit — '" + world + "' matches HEAD.");
+            return;
+        }
+        messages.send(sender,
+                ChatColor.GREEN + "Committed "
+                        + ChatColor.YELLOW + MineGitFormat.shortHash(commit.getId())
+                        + ChatColor.GREEN + " by " + ChatColor.GRAY + commit.getAuthor()
+                        + ChatColor.WHITE + " " + MineGitFormat.firstLine(commit.getMessage()));
+    }
+
     private boolean doLog(CommandSender sender) {
         Player player = requirePlayer(sender);
         if (player == null) {
@@ -205,6 +263,53 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
 
     private static String noRepo(String world) {
         return ChatColor.YELLOW + "No MineGit repo for '" + world + "'. Run /mg init first.";
+    }
+
+    /**
+     * Extracts the commit message from {@code commit -m <message...>}. Bukkit splits the raw input on
+     * spaces, so a quoted message arrives as several tokens; everything after {@code -m} (or
+     * {@code --message}) is rejoined and any single pair of surrounding quotes is stripped. Returns
+     * {@code null} when the flag is missing or its message is empty, so the caller can show usage.
+     */
+    static String parseMessage(String[] args) {
+        int flag = -1;
+        for (int i = 1; i < args.length; i++) {
+            if (args[i].equals("-m") || args[i].equalsIgnoreCase("--message")) {
+                flag = i;
+                break;
+            }
+        }
+        if (flag < 0 || flag + 1 >= args.length) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = flag + 1; i < args.length; i++) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(args[i]);
+        }
+        String message = stripQuotes(sb.toString()).trim();
+        return message.isEmpty() ? null : message;
+    }
+
+    private static String stripQuotes(String s) {
+        if (s.length() >= 2) {
+            char first = s.charAt(0);
+            char last = s.charAt(s.length() - 1);
+            if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+                return s.substring(1, s.length() - 1);
+            }
+        }
+        return s;
+    }
+
+    /**
+     * The commit author for a player: display name = in-game name, with the UUID folded into a stable
+     * placeholder email so both halves of the player's identity (Spec B §4) survive into git.
+     */
+    private static Author authorFor(Actor actor) {
+        return new Author(actor.name(), actor.uuid() + "@players.minegit.local");
     }
 
     private void usage(CommandSender sender) {

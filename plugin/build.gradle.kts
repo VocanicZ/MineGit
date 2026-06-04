@@ -37,6 +37,9 @@ dependencies {
     // WorldAdapter tests is mocked with Mockito against the real 1.8.8 World/Chunk/Block interfaces.
     // 4.x is the last Mockito line that runs on Java 8 bytecode.
     testImplementation("org.mockito:mockito-core:4.11.0")
+
+    // core's in-memory FakeWorldAdapter stands in for a live world in the commit/snapshot tests.
+    testImplementation(testFixtures(project(":core")))
 }
 
 // processResources expands ${version} in plugin.yml so the in-game version matches the build.

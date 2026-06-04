@@ -6,3 +6,7 @@ repos-dir: repos
 
 # How many chunks to apply per server tick during checkout (main-thread throttle, Spec B §6).
 checkout-chunks-per-tick: 4
+
+# How many chunks to read per server tick when a commit snapshots the world (main-thread throttle,
+# Spec B §6). Lower = gentler on the tick but a longer snapshot; higher = faster but a bigger spike.
+commit-chunks-per-tick: 8

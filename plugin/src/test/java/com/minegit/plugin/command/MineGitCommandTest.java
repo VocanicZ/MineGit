@@ -1,6 +1,8 @@
 package com.minegit.plugin.command;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -8,10 +10,13 @@ import static org.mockito.Mockito.when;
 
 import com.minegit.core.adapter.ChunkRef;
 import com.minegit.core.adapter.WorldAdapter;
+import com.minegit.core.fake.FakeWorldAdapter;
 import com.minegit.core.model.BlockChange;
+import com.minegit.core.model.BlockState;
 import com.minegit.core.model.ChunkPos;
 import com.minegit.core.model.DimensionId;
 import com.minegit.core.model.NormalizedChunk;
+import com.minegit.plugin.world.CommitService;
 import com.minegit.plugin.world.WorldRepoRegistry;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Executor;
 import java.util.function.Function;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
@@ -92,13 +98,19 @@ class MineGitCommandTest {
         public void writeChunk(DimensionId dimension, NormalizedChunk chunk) {}
     }
 
+    /** An {@link Executor} that runs every task inline, collapsing the commit thread dance for tests. */
+    private static final Executor INLINE = Runnable::run;
+
     private final CapturingMessages messages = new CapturingMessages();
+
+    /** Override per-test to give a world real content (so commit produces a non-empty commit). */
+    private Function<World, WorldAdapter> adapters = w -> new EmptyAdapter();
 
     private MineGitCommand command() {
         WorldRepoRegistry repos = new WorldRepoRegistry(dataFolder);
-        Function<World, WorldAdapter> adapters = w -> new EmptyAdapter();
         Clock clock = Clock.fixed(Instant.ofEpochSecond(1780576496L), ZoneOffset.UTC);
-        return new MineGitCommand(repos, adapters, clock, messages);
+        CommitService commits = new CommitService(INLINE, INLINE, 16);
+        return new MineGitCommand(repos, adapters, clock, messages, commits);
     }
 
     private Player player(String worldName) {
@@ -106,6 +118,9 @@ class MineGitCommandTest {
         lenient().when(world.getName()).thenReturn(worldName);
         Player player = mock(Player.class);
         lenient().when(player.getWorld()).thenReturn(world);
+        lenient().when(player.getName()).thenReturn("Steve");
+        lenient().when(player.getUniqueId()).thenReturn(
+                java.util.UUID.fromString("00000000-0000-0000-0000-0000000000aa"));
         lenient().when(player.hasPermission(MineGitCommand.PERM_USE)).thenReturn(true);
         lenient().when(player.hasPermission(MineGitCommand.PERM_ADMIN)).thenReturn(true);
         return player;
@@ -205,6 +220,88 @@ class MineGitCommandTest {
         dispatch(p, "log");
 
         assertTrue(messages.anyContains("Initialize"), "log shows the initial commit message");
+    }
+
+    @Test
+    void commitProducesACommitAuthoredByThePlayerAndLogShowsIt() {
+        FakeWorldAdapter live = new FakeWorldAdapter();
+        live.setBlock(DimensionId.OVERWORLD, 1, 64, 2, new BlockState("minecraft:stone"));
+        adapters = w -> live;
+
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        boolean handled = dispatch(p, "commit", "-m", "\"build", "a", "tower\"");
+
+        assertTrue(handled);
+        assertTrue(messages.anyContains("Committed"), "player told the commit landed");
+
+        // The acceptance criterion: a subsequent log shows a commit authored by the player.
+        messages.lines.clear();
+        dispatch(p, "log");
+        assertTrue(messages.anyContains("Steve"), "log shows the player as author");
+        assertTrue(messages.anyContains("build a tower"), "log shows the commit message");
+    }
+
+    @Test
+    void commitWithoutAMessageShowsUsage() {
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        dispatch(p, "commit");
+
+        assertTrue(messages.last().toLowerCase(java.util.Locale.ROOT).contains("usage"));
+    }
+
+    @Test
+    void commitWithoutRepoTellsPlayerToInit() {
+        Player p = player("world");
+
+        dispatch(p, "commit", "-m", "hi");
+
+        assertTrue(messages.anyContains("init"), "commit nudges toward /mg init");
+    }
+
+    @Test
+    void commitWithNoChangesReportsNothingToCommit() {
+        FakeWorldAdapter live = new FakeWorldAdapter();
+        live.setBlock(DimensionId.OVERWORLD, 1, 64, 2, new BlockState("minecraft:stone"));
+        adapters = w -> live;
+
+        Player p = player("world");
+        dispatch(p, "init");
+        dispatch(p, "commit", "-m", "first");
+        messages.lines.clear();
+
+        dispatch(p, "commit", "-m", "again");
+
+        assertTrue(messages.anyContains("Nothing to commit"), "byte-identical world => no commit");
+    }
+
+    @Test
+    void commitParsesAnUnquotedSingleWordMessage() {
+        assertEquals("hello", MineGitCommand.parseMessage(new String[] {"commit", "-m", "hello"}));
+    }
+
+    @Test
+    void commitParsesAQuotedMultiWordMessage() {
+        assertEquals("build a tower",
+                MineGitCommand.parseMessage(new String[] {"commit", "-m", "\"build", "a", "tower\""}));
+    }
+
+    @Test
+    void commitMessageMissingFlagIsNull() {
+        assertNull(MineGitCommand.parseMessage(new String[] {"commit"}));
+        assertNull(MineGitCommand.parseMessage(new String[] {"commit", "-m"}));
+    }
+
+    @Test
+    void commitAppearsInTabCompletion() {
+        Player p = player("world");
+        List<String> completions = command().onTabComplete(p, null, "mg", new String[] {"co"});
+        assertTrue(completions.contains("commit"), "'co' completes to commit");
     }
 
     @Test
