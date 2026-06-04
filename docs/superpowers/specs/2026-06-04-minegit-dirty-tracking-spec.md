@@ -92,10 +92,17 @@ Add `Set<ChunkRef> peekDirty()` to the interface — the non-clearing read for `
 ### 3.4 Reconciliation (the `primed` flag)
 The in-memory dirty set is empty after a server restart, so changes made before the restart but after the
 last commit would be missed. To stay correct:
-- The **first** `commit`/`status`/`diff` of a server session, when `!isPrimed()`, runs the **full** path
-  (`allChunks` for commit; `WorldDiffer.diffWorkingTree` for status/diff), then calls `prime()`.
-- Once primed, all three use the incremental path (`drainDirty`/`peekDirty` + `diffWorkingTreeDirty`).
-- `/mg commit --full` / `/mg rescan` resets to unprimed (forces one full pass) for safety.
+- **Only `commit` primes.** When `!isPrimed()`, commit runs the **full** path (`allChunks`), captures the
+  whole baseline, consumes the dirty set, then calls `prime()`. Priming is tied to a committed baseline —
+  a `status`/`diff` reads everything but persists nothing, so it must **not** prime (else a later commit
+  would trust an incomplete dirty set and silently omit pre-session changes).
+- `status`/`diff` (working-vs-HEAD): run the **full** `WorldDiffer.diffWorkingTree` when `!isPrimed()`
+  (correct, just not yet fast), and the incremental `diffWorkingTreeDirty` once a commit has primed. They
+  never change the primed flag.
+- Once primed, commit uses `drainDirty` and status/diff use `peekDirty` + `diffWorkingTreeDirty`.
+- `/mg commit --full` and `/mg rescan` reset to unprimed (forcing one full pass); a successful
+  `/mg checkout` also unprimes, since it moves HEAD and the dirty set must reconcile against the new
+  baseline.
 
 ---
 
