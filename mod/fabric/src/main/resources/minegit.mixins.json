@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "net.rainbowcreation.vocanicz.minegit.mod.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "refmap": "minegit.refmap.json",
+  "mixins": [],
+  "server": [
+    "LevelChunkMixin"
+  ],
+  "client": [],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

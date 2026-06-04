@@ -73,6 +73,13 @@ dependencies {
 // runs every registered test then exits non-zero on failure. Invoke with
 // `./gradlew :mod:neoforge:runGameTestServer`. Mirrors NeoForge's userdev `gameTestServer` run.
 loom {
+    // Dirty-tracking mixin (Spec E task 4): architectury-loom 1.14 ships the mixin AP off by default,
+    // so re-enable it (useLegacyMixinAp) to generate the refmap that maps named → intermediary/SRG at
+    // runtime on both the dev (named) and remapped jars.
+    mixin {
+        useLegacyMixinAp.set(true)
+        defaultRefmapName.set("minegit.refmap.json")
+    }
     runs {
         create("gameTestServer") {
             server()

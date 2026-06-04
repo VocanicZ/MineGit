@@ -21,4 +21,9 @@ public final class MineGitFabricGameTest {
     public void noOpCheckoutIsClean(GameTestHelper helper) {
         MineGitGameTestLogic.noOpCheckoutIsClean(helper);
     }
+
+    @GameTest(maxTicks = 200)
+    public void incrementalDirtyCommitReverts(GameTestHelper helper) {
+        MineGitGameTestLogic.incrementalDirtyCommitReverts(helper);
+    }
 }

@@ -3,6 +3,7 @@ package net.rainbowcreation.vocanicz.minegit.mod;
 import net.rainbowcreation.vocanicz.minegit.mod.command.MineGitCommands;
 import net.rainbowcreation.vocanicz.minegit.mod.command.ServerCommandRuntime;
 import net.rainbowcreation.vocanicz.minegit.mod.platform.Platform;
+import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTracking;
 import com.mojang.brigadier.CommandDispatcher;
 import dev.architectury.event.events.common.CommandRegistrationEvent;
 import net.minecraft.commands.CommandSourceStack;
@@ -38,6 +39,10 @@ public final class MineGitMod {
                 MineGitInfo.MOD_NAME,
                 Platform.loaderName(),
                 Constants.OBJECT_ID_STRING_LENGTH);
+        // Publish the shared runtime's dirty-tracker registry so the setBlockState mixins (writers) and
+        // the per-command adapters (readers) drive the SAME DirtyChunkSet instances. Done here, before
+        // any command fires, so a block change before the first command still lands in the right set.
+        DirtyTracking.install(sharedRuntime().trackers());
         CommandRegistrationEvent.EVENT.register((dispatcher, registry, selection) -> registerCommands(dispatcher));
     }
 

@@ -12,6 +12,9 @@ Git-backed version control for Minecraft worlds — single-player capable (integ
 '''
 authors = "RainBowCreation, VocanicZ, NathanielSong"
 
+[[mixins]]
+config = "minegit.mixins.json"
+
 [[dependencies."${mod_id}"]]
 modId = "neoforge"
 type = "required"

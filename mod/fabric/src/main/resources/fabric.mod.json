@@ -11,6 +11,7 @@
     "main": ["net.rainbowcreation.vocanicz.minegit.mod.MineGitFabric"],
     "fabric-gametest": ["net.rainbowcreation.vocanicz.minegit.mod.MineGitFabricGameTest"]
   },
+  "mixins": ["minegit.mixins.json"],
   "depends": {
     "fabricloader": ">=0.16",
     "minecraft": ">=1.21.11",

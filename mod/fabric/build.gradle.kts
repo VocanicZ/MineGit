@@ -79,6 +79,13 @@ dependencies {
 // runner enabled, runs every @GameTest, writes a JUnit report, and exits non-zero on failure.
 // Invoke with `./gradlew :mod:fabric:runGametest`.
 loom {
+    // Dirty-tracking mixin (Spec E task 4): architectury-loom 1.14 ships the mixin AP off by default,
+    // so re-enable it (useLegacyMixinAp) to generate the refmap that maps named → intermediary/SRG at
+    // runtime on both the dev (named) and remapped jars.
+    mixin {
+        useLegacyMixinAp.set(true)
+        defaultRefmapName.set("minegit.refmap.json")
+    }
     runs {
         create("gametest") {
             server()

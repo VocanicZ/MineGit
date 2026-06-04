@@ -49,6 +49,8 @@ public final class MineGitNeoForgeGameTest {
                 MineGitGameTestLogic::placeCommitMutateCheckoutRevert);
         registerTest(event, env, "no_op_checkout_is_clean",
                 MineGitGameTestLogic::noOpCheckoutIsClean);
+        registerTest(event, env, "incremental_dirty_commit_reverts",
+                MineGitGameTestLogic::incrementalDirtyCommitReverts);
     }
 
     private static void registerTest(

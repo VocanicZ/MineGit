@@ -33,7 +33,42 @@ public final class ServerLevelAccess implements LevelAccess {
 
     public ServerLevelAccess(ServerLevel level) {
         this.level = Objects.requireNonNull(level, "level");
-        this.dimension = DimensionMapping.fromKey(level.dimension().identifier().toString());
+        this.dimension = dimensionOf(level);
+    }
+
+    /**
+     * The level-key string for {@code level}: the dimension identifier (e.g. {@code
+     * "minecraft:overworld"}). This is the <em>exact</em> string
+     * {@code ServerCommandRuntime.levelKey(ServerLevel)} produces, so callers (the dirty-tracking
+     * mixin bridge) can key the same {@link DirtyTrackerRegistry} entry the per-command adapter uses.
+     */
+    public static String levelKeyOf(ServerLevel level) {
+        return level.dimension().identifier().toString();
+    }
+
+    /**
+     * The core {@link DimensionId} for {@code level}: {@link DimensionMapping#fromKey} over the same
+     * dimension identifier. This is the <em>exact</em> {@link DimensionId} this adapter's {@link
+     * #dimension()} reports, so a {@code ChunkRef} built from it will {@code .equals(...)} the
+     * dimension {@code ModWorldAdapter.read(...)} matches against. Reused by the mixin bridge so the
+     * writer (mixin) and reader (adapter) agree on the dimension without duplicating the scheme.
+     */
+    public static DimensionId dimensionOf(ServerLevel level) {
+        return DimensionMapping.fromKey(levelKeyOf(level));
+    }
+
+    /**
+     * Marks the chunk containing world block {@code (blockX, blockZ)} on {@code level} dirty in the
+     * process-wide {@link DirtyTracking} bridge. This is the <strong>mixin bridge</strong>: the
+     * platform {@code setBlockState} mixins call it with the {@link ServerLevel} + block coords, and
+     * this method does the {@code ServerLevel}→(levelKey, {@link DimensionId}) extraction here — on
+     * the MC-aware common side — so the mixin never touches the core {@link DimensionId} type (which
+     * is not on the platform compile classpath) and {@link DirtyTracking} stays free of Minecraft
+     * types. Uses {@link #levelKeyOf}/{@link #dimensionOf} so the key + dimension align exactly with
+     * the per-command adapter.
+     */
+    public static void markDirty(ServerLevel level, int blockX, int blockZ) {
+        DirtyTracking.markDirty(levelKeyOf(level), dimensionOf(level), blockX, blockZ);
     }
 
     @Override

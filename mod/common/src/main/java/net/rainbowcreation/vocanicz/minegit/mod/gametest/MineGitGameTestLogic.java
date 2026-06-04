@@ -1,13 +1,18 @@
 package net.rainbowcreation.vocanicz.minegit.mod.gametest;
 
+import net.rainbowcreation.vocanicz.minegit.core.adapter.ChunkRef;
+import net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet;
 import net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.core.git.Author;
 import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
 import net.rainbowcreation.vocanicz.minegit.core.model.ChunkPos;
+import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
 import net.rainbowcreation.vocanicz.minegit.mod.command.MineGitService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CommitService;
+import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTrackerRegistry;
 import net.rainbowcreation.vocanicz.minegit.mod.world.ModWorldAdapter;
+import net.rainbowcreation.vocanicz.minegit.mod.world.ServerLevelAccess;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -111,6 +116,62 @@ public final class MineGitGameTestLogic {
         helper.succeed();
     }
 
+    /**
+     * Incremental/dirty-path loop: a priming commit over the full structure, then change ONE block and
+     * mark only its chunk dirty (mirroring the {@code setBlockState} mixin) → {@code commit B} drains
+     * exactly that chunk → checkout the priming commit and assert the block reverted. This proves the
+     * event-based {@link DirtyChunkSet} feeds the same {@link ModWorldAdapter} the production command
+     * uses, so commits can be incremental rather than full-world.
+     *
+     * <p>Why drive the dirty set directly: a GameTest world sets blocks through the
+     * {@link GameTestLevelAccess} seam, and whether the {@code LevelChunk.setBlockState} mixin fires
+     * for those writes is not guaranteed in the headless test harness. The mixin and this test both
+     * funnel into the <em>same</em> {@link DirtyChunkSet} via the <em>same</em> levelKey+DimensionId
+     * scheme ({@link ServerLevelAccess#levelKeyOf}/{@link ServerLevelAccess#dimensionOf}), so marking
+     * the set here exercises the identical incremental commit path the mixin would.
+     */
+    public static void incrementalDirtyCommitReverts(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        DirtyTrackerRegistry trackers = new DirtyTrackerRegistry();
+        String levelKey = ServerLevelAccess.levelKeyOf(level);
+        DimensionId dimension = ServerLevelAccess.dimensionOf(level);
+        DirtyChunkSet dirty = trackers.tracker(levelKey);
+        WorldAdapter adapter = trackedAdapterFor(helper, dirty);
+        Path repo = tempRepo();
+
+        // Prime: full gold structure committed as A (unprimed → full scan, primes the tracker).
+        setAll(helper, Blocks.GOLD_BLOCK);
+        MineGitService.init(repo, adapter, CLOCK);
+        require(commit(adapter, repo, "A", dirty) != null, "priming commit A should snapshot the gold build");
+        require(dirty.isPrimed(), "the first commit must prime the dirty tracker");
+        require(dirty.peekDirty().isEmpty(), "priming drains the dirty set");
+
+        // Mutate exactly ONE block and mark only its chunk dirty, exactly as the mixin bridge would.
+        BlockPos one = SPOTS[0];
+        helper.setBlock(one, Blocks.DIAMOND_BLOCK);
+        BlockPos abs = helper.absolutePos(one);
+        markDirty(dirty, dimension, abs);
+
+        Set<ChunkRef> peeked = dirty.peekDirty();
+        require(peeked.size() == 1, "exactly one chunk should be dirty after one block change, was " + peeked.size());
+        ChunkRef onlyDirty = peeked.iterator().next();
+        require(onlyDirty.getDimension().equals(dimension),
+                "dirty ref dimension must match the adapter dimension (mixin/adapter alignment)");
+        require(onlyDirty.getPos().equals(new ChunkPos(abs.getX() >> 4, abs.getZ() >> 4)),
+                "dirty ref must point at the changed block's chunk");
+
+        // Incremental commit B: drains only the one dirty chunk (primed path), HEAD moves to diamond.
+        require(commit(adapter, repo, "B", dirty) != null, "incremental commit B should snapshot the one dirty chunk");
+        helper.assertBlockPresent(Blocks.DIAMOND_BLOCK, one);
+
+        // Checkout the priming commit: the one block reverts to gold (and the rest stay gold).
+        CheckoutService.Result result = checkout(adapter, repo, "HEAD~1", false);
+        require(!result.isError(), "checkout HEAD~1 should succeed on a clean world");
+        assertAll(helper, Blocks.GOLD_BLOCK);
+
+        helper.succeed();
+    }
+
     // ---- helpers ------------------------------------------------------------------------------
 
     private static WorldAdapter adapterFor(GameTestHelper helper) {
@@ -121,6 +182,22 @@ public final class MineGitGameTestLogic {
             chunks.add(new ChunkPos(abs.getX() >> 4, abs.getZ() >> 4));
         }
         return new ModWorldAdapter(new GameTestLevelAccess(level, chunks));
+    }
+
+    /** Like {@link #adapterFor} but backed by {@code dirty}, so commits can follow the incremental path. */
+    private static WorldAdapter trackedAdapterFor(GameTestHelper helper, DirtyChunkSet dirty) {
+        ServerLevel level = helper.getLevel();
+        Set<ChunkPos> chunks = new LinkedHashSet<ChunkPos>();
+        for (BlockPos rel : SPOTS) {
+            BlockPos abs = helper.absolutePos(rel);
+            chunks.add(new ChunkPos(abs.getX() >> 4, abs.getZ() >> 4));
+        }
+        return new ModWorldAdapter(new GameTestLevelAccess(level, chunks), dirty);
+    }
+
+    /** Marks the chunk of the absolute block {@code abs} dirty, mirroring the {@code setBlockState} mixin. */
+    private static void markDirty(DirtyChunkSet dirty, DimensionId dimension, BlockPos abs) {
+        dirty.markDirty(new ChunkRef(dimension, new ChunkPos(abs.getX() >> 4, abs.getZ() >> 4)));
     }
 
     private static void setAll(GameTestHelper helper, net.minecraft.world.level.block.Block block) {
@@ -136,9 +213,13 @@ public final class MineGitGameTestLogic {
     }
 
     private static CommitInfo commit(WorldAdapter adapter, Path repo, String message) {
+        return commit(adapter, repo, message, null);
+    }
+
+    private static CommitInfo commit(WorldAdapter adapter, Path repo, String message, DirtyChunkSet tracker) {
         AtomicReference<CommitService.Result> out = new AtomicReference<CommitService.Result>();
         new CommitService(INLINE, INLINE, CHUNKS_PER_TICK)
-                .commit(repo, adapter, CLOCK, message, AUTHOR, null, out::set);
+                .commit(repo, adapter, CLOCK, message, AUTHOR, tracker, out::set);
         CommitService.Result result = out.get();
         if (result == null) {
             throw new IllegalStateException("commit '" + message + "' never completed");
