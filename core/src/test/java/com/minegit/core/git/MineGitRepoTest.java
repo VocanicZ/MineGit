@@ -168,6 +168,16 @@ class MineGitRepoTest {
     }
 
     @Test
+    void currentBranch_returnsHeadBranchName(@TempDir Path dir) throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            // Creating a branch does not move HEAD: it stays on the default branch.
+            repo.branch("feature");
+            assertEquals("master", repo.currentBranch());
+        }
+    }
+
+    @Test
     void branches_distinguishesLocalFromRemoteTracking(@TempDir Path dir) throws Exception {
         FakeWorldAdapter world = new FakeWorldAdapter();
         try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {

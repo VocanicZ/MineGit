@@ -140,6 +140,22 @@ class CliTest {
     }
 
     @Test
+    void branchListMarksCurrentBranch(@TempDir Path dir) {
+        assertEquals(0, run(dir, "init").code);
+        assertEquals(0, run(dir, "branch", "feature").code);
+
+        Result list = run(dir, "branch");
+        assertEquals(0, list.code, () -> "branch list failed: " + list.err);
+        // HEAD is still master after creating feature: master is marked, feature is not.
+        assertTrue(
+                list.out.lines().anyMatch(l -> l.equals("* master")),
+                () -> "current branch master not marked with '* ': " + list.out);
+        assertTrue(
+                list.out.lines().anyMatch(l -> l.equals("  feature")),
+                () -> "non-current branch feature not prefixed with two spaces: " + list.out);
+    }
+
+    @Test
     void checkoutRevertsWorldToPriorCommit(@TempDir Path dir) {
         assertEquals(0, run(dir, "init").code);
         run(dir, "set", "overworld", "0", "64", "0", "minecraft:stone");
