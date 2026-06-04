@@ -2,10 +2,12 @@ package com.minegit.mod.command;
 
 import com.minegit.core.adapter.WorldAdapter;
 import com.minegit.core.git.CommitInfo;
+import com.minegit.core.git.UnknownRefException;
 import com.minegit.core.model.WorldDiff;
 import com.minegit.mod.world.LevelRepoRegistry;
 import com.minegit.mod.world.ModWorldAdapter;
 import com.minegit.mod.world.ServerLevelAccess;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -119,7 +121,59 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         return 1;
     }
 
+    @Override
+    public int diff(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            return notInGame(ctx);
+        }
+        ServerLevel level = player.level();
+        String levelKey = levelKey(level);
+        LevelRepoRegistry registry = registryFor(ctx.getSource().getServer());
+        if (!registry.isBound(levelKey)) {
+            return noRepo(ctx, levelKey);
+        }
+        Path repoPath = registry.repoPath(levelKey);
+        WorldAdapter adapter = adapterFor(level);
+        String refA = optionalArg(ctx, "refA");
+        String refB = optionalArg(ctx, "refB");
+        WorldDiff diff;
+        String scope;
+        try {
+            if (refA == null) {
+                diff = MineGitService.status(repoPath, adapter, clock); // working-vs-HEAD
+                scope = levelKey;
+            } else {
+                diff = MineGitService.diffRefs(repoPath, adapter, clock, refA, refB);
+                scope = refA + ".." + refB;
+            }
+        } catch (UnknownRefException e) {
+            // Surface unresolvable refs loudly (core #37) — never silently diff against an empty tree.
+            ctx.getSource().sendFailure(
+                    Component.literal(e.getMessage()).withStyle(ChatFormatting.RED));
+            return 0;
+        }
+        String header = scope;
+        ctx.getSource().sendSuccess(
+                () -> Component.literal("Diff ").withStyle(ChatFormatting.GOLD)
+                        .append(Component.literal(header + ":").withStyle(ChatFormatting.GRAY)),
+                false);
+        for (Component line : MineGitText.diffBody(diff, MineGitText.DIFF_LINE_CAP)) {
+            ctx.getSource().sendSuccess(() -> line, false);
+        }
+        return 1;
+    }
+
     // ---- helpers ------------------------------------------------------------------------------
+
+    /** The string argument {@code name} if Brigadier matched it, or {@code null} when absent. */
+    private static String optionalArg(CommandContext<CommandSourceStack> ctx, String name) {
+        try {
+            return StringArgumentType.getString(ctx, name);
+        } catch (IllegalArgumentException absent) {
+            return null;
+        }
+    }
 
     private WorldAdapter adapterFor(ServerLevel level) {
         return new ModWorldAdapter(new ServerLevelAccess(level));

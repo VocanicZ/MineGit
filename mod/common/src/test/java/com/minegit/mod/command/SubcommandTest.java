@@ -11,12 +11,12 @@ import org.junit.jupiter.api.Test;
 class SubcommandTest {
 
     @Test
-    void literalsAreTheReadSetupTrioInOrder() {
-        assertEquals(Arrays.asList("init", "status", "log"), Subcommand.literals());
+    void literalsAreTheReadSetupCommandsInOrder() {
+        assertEquals(Arrays.asList("init", "status", "log", "diff"), Subcommand.literals());
     }
 
     @Test
-    void readSetupTrioIsAvailableToEveryPlayer() {
+    void readSetupCommandsAreAvailableToEveryPlayer() {
         for (Subcommand sub : Subcommand.values()) {
             assertEquals(0, sub.permissionLevel(), sub + " should be ungated in this slice");
         }

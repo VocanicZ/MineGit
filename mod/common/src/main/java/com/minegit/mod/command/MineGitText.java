@@ -1,10 +1,17 @@
 package com.minegit.mod.command;
 
 import com.minegit.core.git.CommitInfo;
+import com.minegit.core.model.BlockChange;
+import com.minegit.core.model.BlockState;
+import com.minegit.core.model.ChunkDiff;
+import com.minegit.core.model.DimensionId;
 import com.minegit.core.model.WorldDiff;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
@@ -25,6 +32,9 @@ public final class MineGitText {
 
     /** Default cap on how many commits a single {@code /mg log} prints before truncating. */
     public static final int LOG_LIMIT = 10;
+
+    /** Default cap on {@code /mg diff} block-change lines before truncation (chat would flood). */
+    public static final int DIFF_LINE_CAP = 20;
 
     private MineGitText() {
     }
@@ -76,6 +86,64 @@ public final class MineGitText {
     /** The dimmed {@code "…and X more"} footer when the log is truncated. */
     public static Component andMore(int hidden) {
         return Component.literal("…and " + hidden + " more").withStyle(ChatFormatting.DARK_GRAY);
+    }
+
+    /**
+     * One coloured block-change line: ADD green {@code + x y z id}, REMOVE red {@code - x y z id},
+     * CHANGE yellow {@code ~ x y z oldId -> newId}. Coordinates are world-absolute (Spec D §4 — the
+     * mod analogue of the plugin's {@code MineGitFormat.changeLine}, as a {@link Component}).
+     */
+    public static Component changeLine(BlockChange change) {
+        String at = change.getX() + " " + change.getY() + " " + change.getZ();
+        switch (change.getKind()) {
+            case ADD:
+                return Component.literal("+ " + at + " " + idOf(change.getNewState()))
+                        .withStyle(ChatFormatting.GREEN);
+            case REMOVE:
+                return Component.literal("- " + at + " " + idOf(change.getOldState()))
+                        .withStyle(ChatFormatting.RED);
+            case CHANGE:
+                return Component.literal("~ " + at + " "
+                        + idOf(change.getOldState()) + " -> " + idOf(change.getNewState()))
+                        .withStyle(ChatFormatting.YELLOW);
+            default:
+                return Component.literal("? " + at).withStyle(ChatFormatting.GRAY);
+        }
+    }
+
+    /**
+     * The chat body for a {@code /mg diff}: one {@link #changeLine} per block change across every
+     * dimension (sorted by id) and chunk (already in {@code (cx, cz)} order), capped at {@code cap}
+     * lines with a dimmed {@link #andMore} footer when truncated, then a trailing
+     * {@link #summary(WorldDiff)}.
+     */
+    public static List<Component> diffBody(WorldDiff diff, int cap) {
+        List<DimensionId> dims = new ArrayList<DimensionId>(diff.getDimensions().keySet());
+        dims.sort(Comparator.comparing(DimensionId::getId));
+
+        List<Component> lines = new ArrayList<Component>();
+        int hidden = 0;
+        for (DimensionId dim : dims) {
+            for (ChunkDiff chunkDiff : diff.getChunkDiffs(dim)) {
+                for (BlockChange change : chunkDiff.getChanges()) {
+                    if (lines.size() < cap) {
+                        lines.add(changeLine(change));
+                    } else {
+                        hidden++;
+                    }
+                }
+            }
+        }
+        if (hidden > 0) {
+            lines.add(andMore(hidden));
+        }
+        lines.add(summary(diff));
+        return lines;
+    }
+
+    /** The block id, or {@code minecraft:air} for an absent (null) state. */
+    private static String idOf(BlockState state) {
+        return state == null ? BlockState.AIR.getId() : state.getId();
     }
 
     /** A success line in MineGit's gold/green house style. */

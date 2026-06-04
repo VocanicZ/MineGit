@@ -3,6 +3,7 @@ package com.minegit.mod.command;
 import com.minegit.mod.MineGitInfo;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.tree.LiteralCommandNode;
@@ -41,6 +42,9 @@ public final class MineGitCommands {
 
         int log(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx)
                 throws CommandSyntaxException;
+
+        int diff(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx)
+                throws CommandSyntaxException;
     }
 
     /** Registers {@code /minegit} (+ aliases) on {@code dispatcher}, delegating to {@code runtime}. */
@@ -60,7 +64,24 @@ public final class MineGitCommands {
                 .executes(MineGitCommands::usage)
                 .then(subcommand(Subcommand.INIT, runtime::init))
                 .then(subcommand(Subcommand.STATUS, runtime::status))
-                .then(subcommand(Subcommand.LOG, runtime::log));
+                .then(subcommand(Subcommand.LOG, runtime::log))
+                .then(diffSubcommand(runtime));
+    }
+
+    /**
+     * The {@code diff} literal: bare {@code /mg diff} runs working-vs-HEAD, while the nested
+     * {@code <refA> <refB>} string arguments run ref-vs-ref (Spec D §4). Both forms share the same
+     * permission gate and dispatch to {@link Runtime#diff}; the runtime reads the optional refs off
+     * the context, so one method serves both shapes.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> diffSubcommand(Runtime runtime) {
+        Command<CommandSourceStack> action = runtime::diff;
+        return Commands.literal(Subcommand.DIFF.literal())
+                .requires(Commands.hasPermission(permissionCheck(Subcommand.DIFF.permissionLevel())))
+                .executes(action)
+                .then(Commands.argument("refA", StringArgumentType.string())
+                        .then(Commands.argument("refB", StringArgumentType.string())
+                                .executes(action)));
     }
 
     /** A gated subcommand literal: {@code requires(hasPermission(level))} + the execution action. */
