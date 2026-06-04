@@ -269,6 +269,71 @@ class MineGitRepoTest {
     }
 
     @Test
+    void planCheckout_computesDelta_withoutMutatingWorldOrRef(@TempDir Path dir) throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        BlockState dirt = new BlockState("minecraft:dirt");
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, stone);
+            repo.commit("A", "Steve");
+            world.setBlock(DimensionId.OVERWORLD, 100, 64, 0, dirt);
+            repo.commit("B", "Steve");
+
+            // Planning a revert to A reports the HEAD -> target delta (one removal) but mutates nothing:
+            // the live world still holds B's dirt and the ref still points at B. Apply + ref move are
+            // the caller's separate, throttle-able steps (Spec B §6).
+            WorldDiff plan = repo.planCheckout("HEAD~1", false);
+
+            assertEquals(1, plan.getRemoved(), "one block to remove on the revert");
+            assertEquals(0, plan.getAdded());
+            assertEquals(0, plan.getChanged());
+            assertEquals(dirt, world.getBlock(DimensionId.OVERWORLD, 100, 64, 0),
+                    "planning does not touch the live world");
+            assertEquals("B", repo.log().get(0).getMessage(), "planning does not move the ref");
+        }
+    }
+
+    @Test
+    void planCheckout_refusesDirtyTree_unlessForced(@TempDir Path dir) throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        BlockState dirt = new BlockState("minecraft:dirt");
+        BlockState glass = new BlockState("minecraft:glass");
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, stone);
+            repo.commit("A", "Steve");
+            world.setBlock(DimensionId.OVERWORLD, 100, 64, 0, dirt);
+            repo.commit("B", "Steve");
+            world.setBlock(DimensionId.OVERWORLD, 200, 64, 0, glass); // uncommitted live edit
+
+            assertThrows(
+                    WorkingTreeDirtyException.class,
+                    () -> repo.planCheckout("HEAD~1", false),
+                    "dirty tree refused without force");
+
+            WorldDiff plan = repo.planCheckout("HEAD~1", true);
+            assertEquals(1, plan.getRemoved(), "forced plan computes the delta anyway");
+        }
+    }
+
+    @Test
+    void finishCheckout_movesRefToTarget(@TempDir Path dir) throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, new BlockState("minecraft:stone"));
+            repo.commit("A", "Steve");
+            world.setBlock(DimensionId.OVERWORLD, 100, 64, 0, new BlockState("minecraft:dirt"));
+            repo.commit("B", "Steve");
+
+            repo.finishCheckout("HEAD~1");
+
+            List<CommitInfo> log = repo.log();
+            assertEquals(2, log.size(), "branch reset to A (init + A)");
+            assertEquals("A", log.get(0).getMessage());
+        }
+    }
+
+    @Test
     void diffRefs_unknownRef_failsLoudly_insteadOfDiffingAgainstEmpty(@TempDir Path dir)
             throws Exception {
         FakeWorldAdapter world = new FakeWorldAdapter();

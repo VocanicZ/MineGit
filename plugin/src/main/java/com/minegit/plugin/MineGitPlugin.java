@@ -9,6 +9,7 @@ import com.minegit.plugin.command.MineGitCommand;
 import com.minegit.plugin.version.ServerVersion;
 import com.minegit.plugin.world.AsyncExecutor;
 import com.minegit.plugin.world.BukkitWorldAdapter;
+import com.minegit.plugin.world.CheckoutService;
 import com.minegit.plugin.world.CommitService;
 import com.minegit.plugin.world.MainThreadExecutor;
 import com.minegit.plugin.world.WorldRepoRegistry;
@@ -23,9 +24,9 @@ import org.bukkit.plugin.java.JavaPlugin;
  *
  * <p>On enable it detects the server version, selects the version-appropriate {@code BlockBridge}
  * (Spec B §3), binds the per-world {@code WorldAdapter}/repo registry (Spec B §4), and registers the
- * {@code /minegit} dispatcher with {@code init}/{@code status}/{@code log} (#45) and {@code commit}
- * (#46, async git via {@link CommitService}). The remaining subcommands ({@code diff}/{@code
- * checkout}) land in follow-up issues.
+ * {@code /minegit} dispatcher with {@code init}/{@code status}/{@code log} (#45), {@code diff} (#47),
+ * {@code commit} (#46, async git via {@link CommitService}), and {@code checkout} (#48, throttled
+ * main-thread apply via {@link CheckoutService}).
  */
 public final class MineGitPlugin extends JavaPlugin {
 
@@ -34,6 +35,7 @@ public final class MineGitPlugin extends JavaPlugin {
     private WorldRepoRegistry worldRepos;
     private Executor mainThread;
     private CommitService commitService;
+    private CheckoutService checkoutService;
     private MessageService messages;
 
     @Override
@@ -48,9 +50,12 @@ public final class MineGitPlugin extends JavaPlugin {
         // Reads/applies run on the server main thread; git work hops off via runTaskAsynchronously (#44).
         this.mainThread = new MainThreadExecutor(this, getServer().getScheduler());
         // commit (#46): throttled main-thread reads -> async serialize+git -> completion on main thread.
+        Executor async = new AsyncExecutor(this, getServer().getScheduler());
         int chunksPerTick = Math.max(1, getConfig().getInt("commit-chunks-per-tick", 8));
-        this.commitService = new CommitService(
-                mainThread, new AsyncExecutor(this, getServer().getScheduler()), chunksPerTick);
+        this.commitService = new CommitService(mainThread, async, chunksPerTick);
+        // checkout (#48): throttled main-thread snapshot+apply, async dirty-guard/diff/ref-move.
+        int applyChunksPerTick = Math.max(1, getConfig().getInt("checkout-chunks-per-tick", 4));
+        this.checkoutService = new CheckoutService(mainThread, async, applyChunksPerTick);
         // Adventure components on modern servers, legacy ChatColor on 1.8-era ones (#45, Spec B §5).
         this.messages = MessageServices.detect();
         registerCommands();
@@ -61,7 +66,8 @@ public final class MineGitPlugin extends JavaPlugin {
     /** Wires the {@code /minegit} dispatcher (+ tab completer) onto the command declared in plugin.yml. */
     private void registerCommands() {
         MineGitCommand command = new MineGitCommand(
-                worldRepos, this::adapterFor, Clock.systemUTC(), messages, commitService);
+                worldRepos, this::adapterFor, Clock.systemUTC(), messages, commitService,
+                checkoutService);
         PluginCommand minegit = getCommand("minegit");
         if (minegit != null) {
             minegit.setExecutor(command);
