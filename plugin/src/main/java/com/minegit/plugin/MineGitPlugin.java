@@ -4,6 +4,11 @@ import com.minegit.core.mapping.LegacyBlockMapper;
 import com.minegit.plugin.block.BlockBridge;
 import com.minegit.plugin.block.BlockBridges;
 import com.minegit.plugin.version.ServerVersion;
+import com.minegit.plugin.world.BukkitWorldAdapter;
+import com.minegit.plugin.world.MainThreadExecutor;
+import com.minegit.plugin.world.WorldRepoRegistry;
+import java.util.concurrent.Executor;
+import org.bukkit.World;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
@@ -17,6 +22,8 @@ public final class MineGitPlugin extends JavaPlugin {
 
     private ServerVersion serverVersion;
     private BlockBridge blockBridge;
+    private WorldRepoRegistry worldRepos;
+    private Executor mainThread;
 
     @Override
     public void onEnable() {
@@ -25,6 +32,10 @@ public final class MineGitPlugin extends JavaPlugin {
         // Pick the block bridge once from the detected version (#42 -> #43): legacy id/meta vs modern
         // reflection. The legacy mapper is loaded eagerly; the modern bridge defers its reflection.
         this.blockBridge = BlockBridges.forVersion(serverVersion, new LegacyBlockMapper());
+        // One repo per world under plugins/MineGit/repos/<world>; bindings persist across restarts (#44).
+        this.worldRepos = new WorldRepoRegistry(getDataFolder().toPath());
+        // Reads/applies run on the server main thread; git work hops off via runTaskAsynchronously (#44).
+        this.mainThread = new MainThreadExecutor(this, getServer().getScheduler());
         getLogger().info("MineGit enabled on server version " + serverVersion
                 + " (" + (serverVersion.isLegacy() ? "legacy" : "modern") + " block bridge)");
     }
@@ -57,5 +68,20 @@ public final class MineGitPlugin extends JavaPlugin {
     /** The block bridge selected for this server, used by the WorldAdapter (Spec B §3, §4). */
     public BlockBridge blockBridge() {
         return blockBridge;
+    }
+
+    /** The world&harr;repo registry: one MineGit repo per Bukkit world (Spec B §4). */
+    public WorldRepoRegistry worldRepos() {
+        return worldRepos;
+    }
+
+    /** An executor that runs tasks on the server main thread (Spec B §6). */
+    public Executor mainThread() {
+        return mainThread;
+    }
+
+    /** Builds a {@link BukkitWorldAdapter} bound to {@code world} using the selected block bridge. */
+    public BukkitWorldAdapter adapterFor(World world) {
+        return new BukkitWorldAdapter(world, blockBridge);
     }
 }

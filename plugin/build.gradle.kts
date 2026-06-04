@@ -32,6 +32,11 @@ dependencies {
     // their method signatures, so loading them (e.g. for a `forVersion(...) instanceof` selection
     // assertion) requires the API to link. The reflection paths themselves are validated in-game.
     testImplementation("org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT")
+
+    // MockBukkit does not exist for the 1.8.8 API (it targets Paper 1.13+), so the Bukkit seam in the
+    // WorldAdapter tests is mocked with Mockito against the real 1.8.8 World/Chunk/Block interfaces.
+    // 4.x is the last Mockito line that runs on Java 8 bytecode.
+    testImplementation("org.mockito:mockito-core:4.11.0")
 }
 
 // processResources expands ${version} in plugin.yml so the in-game version matches the build.
