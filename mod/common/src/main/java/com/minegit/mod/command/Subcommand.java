@@ -11,15 +11,16 @@ import java.util.Locale;
  * ({@link MineGitCommands}) and tab-completion off one ordered enum keeps the two in lock-step and
  * makes the gating decision unit-testable without a live server.
  *
- * <p>This first slice ships the read/setup trio — {@code init}, {@code status}, {@code log} — all at
- * permission level 0 (any player). The <strong>gating seam</strong> is wired now so the later
- * mutating commands ({@code commit}, {@code checkout}) drop in at {@link #OP_PERMISSION_LEVEL}
- * (vanilla op, level 2) without touching the registration code.
+ * <p>This slice ships the read/setup commands — {@code init}, {@code status}, {@code log} and
+ * {@code diff} — all at permission level 0 (any player). The <strong>gating seam</strong> is wired
+ * now so the later mutating commands ({@code commit}, {@code checkout}) drop in at
+ * {@link #OP_PERMISSION_LEVEL} (vanilla op, level 2) without touching the registration code.
  */
 public enum Subcommand {
     INIT("init", 0),
     STATUS("status", 0),
-    LOG("log", 0);
+    LOG("log", 0),
+    DIFF("diff", 0);
 
     /**
      * Vanilla op permission level. Mutating subcommands added by later Spec D batches ({@code
