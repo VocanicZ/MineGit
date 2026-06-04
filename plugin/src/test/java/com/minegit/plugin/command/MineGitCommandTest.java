@@ -1,0 +1,246 @@
+package com.minegit.plugin.command;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import com.minegit.core.adapter.ChunkRef;
+import com.minegit.core.adapter.WorldAdapter;
+import com.minegit.core.model.BlockChange;
+import com.minegit.core.model.ChunkPos;
+import com.minegit.core.model.DimensionId;
+import com.minegit.core.model.NormalizedChunk;
+import com.minegit.plugin.world.WorldRepoRegistry;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Function;
+import org.bukkit.World;
+import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+/**
+ * Command parsing/dispatch, world&harr;repo binding via {@code init}, {@code status}/{@code log}
+ * output, and permission gating (Spec B §5, issue #45). MockBukkit does not target the 1.8.8 API, so
+ * the Bukkit seam ({@link Player}/{@link World}/{@link CommandSender}) is mocked with Mockito; an
+ * empty in-memory {@link WorldAdapter} stands in for the live world.
+ */
+class MineGitCommandTest {
+
+    @TempDir
+    Path dataFolder;
+
+    /** Captures every line the command sends, so assertions can inspect output text. */
+    private static final class CapturingMessages implements MessageService {
+        final List<String> lines = new ArrayList<String>();
+
+        @Override
+        public void send(CommandSender sender, String legacyText) {
+            lines.add(legacyText);
+        }
+
+        String last() {
+            return lines.get(lines.size() - 1);
+        }
+
+        boolean anyContains(String needle) {
+            for (String l : lines) {
+                if (l.contains(needle)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    /** An empty world: one overworld dimension, no chunks. Enough for init/status/log. */
+    private static final class EmptyAdapter implements WorldAdapter {
+        @Override
+        public Set<DimensionId> dimensions() {
+            return Collections.singleton(DimensionId.OVERWORLD);
+        }
+
+        @Override
+        public NormalizedChunk read(DimensionId dimension, ChunkPos pos) {
+            return null;
+        }
+
+        @Override
+        public Set<ChunkRef> allChunks() {
+            return Collections.emptySet();
+        }
+
+        @Override
+        public Set<ChunkRef> drainDirty() {
+            return Collections.emptySet();
+        }
+
+        @Override
+        public void apply(DimensionId dimension, ChunkPos pos, List<BlockChange> changes) {}
+
+        @Override
+        public void writeChunk(DimensionId dimension, NormalizedChunk chunk) {}
+    }
+
+    private final CapturingMessages messages = new CapturingMessages();
+
+    private MineGitCommand command() {
+        WorldRepoRegistry repos = new WorldRepoRegistry(dataFolder);
+        Function<World, WorldAdapter> adapters = w -> new EmptyAdapter();
+        Clock clock = Clock.fixed(Instant.ofEpochSecond(1780576496L), ZoneOffset.UTC);
+        return new MineGitCommand(repos, adapters, clock, messages);
+    }
+
+    private Player player(String worldName) {
+        World world = mock(World.class);
+        lenient().when(world.getName()).thenReturn(worldName);
+        Player player = mock(Player.class);
+        lenient().when(player.getWorld()).thenReturn(world);
+        lenient().when(player.hasPermission(MineGitCommand.PERM_USE)).thenReturn(true);
+        lenient().when(player.hasPermission(MineGitCommand.PERM_ADMIN)).thenReturn(true);
+        return player;
+    }
+
+    private boolean dispatch(CommandSender sender, String... args) {
+        return command().onCommand(sender, null, "mg", args);
+    }
+
+    @Test
+    void initCreatesGitRepoAndBindsWorld() {
+        Player p = player("world");
+
+        boolean handled = dispatch(p, "init");
+
+        assertTrue(handled);
+        WorldRepoRegistry repos = new WorldRepoRegistry(dataFolder);
+        assertTrue(repos.isBound("world"), "world should be bound after init");
+        assertTrue(Files.isDirectory(repos.repoPath("world").resolve(".git")), "git repo created");
+        assertTrue(messages.anyContains("world"), "success message names the world");
+    }
+
+    @Test
+    void initTwiceReportsAlreadyInitialized() {
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        dispatch(p, "init");
+
+        assertTrue(messages.last().contains("already"), "second init warns it already exists");
+    }
+
+    @Test
+    void initFromConsoleRefusesBecauseThereIsNoWorld() {
+        CommandSender console = mock(CommandSender.class);
+        lenient().when(console.hasPermission(MineGitCommand.PERM_USE)).thenReturn(true);
+
+        dispatch(console, "init");
+
+        assertTrue(messages.last().contains("in-game"), "console gets an in-game-only message");
+    }
+
+    @Test
+    void noArgsShowsUsage() {
+        Player p = player("world");
+
+        dispatch(p);
+
+        assertTrue(messages.last().toLowerCase(java.util.Locale.ROOT).contains("usage"));
+    }
+
+    @Test
+    void unknownSubcommandIsReported() {
+        Player p = player("world");
+
+        dispatch(p, "frobnicate");
+
+        assertTrue(messages.anyContains("Unknown subcommand"));
+    }
+
+    @Test
+    void statusWithoutRepoTellsPlayerToInit() {
+        Player p = player("world");
+
+        dispatch(p, "status");
+
+        assertTrue(messages.last().contains("init"), "status nudges toward /mg init");
+    }
+
+    @Test
+    void statusOnFreshRepoShowsZeroDelta() {
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        dispatch(p, "status");
+
+        assertTrue(messages.last().contains("+0"), "fresh world matches HEAD: +0/-0/~0");
+    }
+
+    @Test
+    void logWithoutRepoTellsPlayerToInit() {
+        Player p = player("world");
+
+        dispatch(p, "log");
+
+        assertTrue(messages.last().contains("init"));
+    }
+
+    @Test
+    void logListsTheInitialCommit() {
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        dispatch(p, "log");
+
+        assertTrue(messages.anyContains("Initialize"), "log shows the initial commit message");
+    }
+
+    @Test
+    void statusDeniedWithoutUsePermission() {
+        World world = mock(World.class);
+        lenient().when(world.getName()).thenReturn("world");
+        Player p = mock(Player.class);
+        lenient().when(p.getWorld()).thenReturn(world);
+        when(p.hasPermission(MineGitCommand.PERM_USE)).thenReturn(false);
+
+        dispatch(p, "status");
+
+        assertTrue(messages.last().toLowerCase(java.util.Locale.ROOT).contains("permission"));
+    }
+
+    @Test
+    void tabCompletesSubcommandsByPrefix() {
+        Player p = player("world");
+
+        List<String> completions =
+                command().onTabComplete(p, null, "mg", new String[] {"s"});
+
+        assertTrue(completions.contains("status"), "'s' completes to status");
+        assertFalse(completions.contains("init"), "'s' excludes non-matching subcommands");
+    }
+
+    @Test
+    void tabHidesSubcommandsThePlayerCannotUse() {
+        World world = mock(World.class);
+        lenient().when(world.getName()).thenReturn("world");
+        Player p = mock(Player.class);
+        when(p.hasPermission(MineGitCommand.PERM_USE)).thenReturn(false);
+
+        List<String> completions =
+                command().onTabComplete(p, null, "mg", new String[] {""});
+
+        assertTrue(completions.isEmpty(), "no minegit.use -> no read subcommands offered");
+    }
+}

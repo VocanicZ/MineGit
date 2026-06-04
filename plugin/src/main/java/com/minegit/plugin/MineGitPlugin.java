@@ -3,20 +3,26 @@ package com.minegit.plugin;
 import com.minegit.core.mapping.LegacyBlockMapper;
 import com.minegit.plugin.block.BlockBridge;
 import com.minegit.plugin.block.BlockBridges;
+import com.minegit.plugin.command.MessageService;
+import com.minegit.plugin.command.MessageServices;
+import com.minegit.plugin.command.MineGitCommand;
 import com.minegit.plugin.version.ServerVersion;
 import com.minegit.plugin.world.BukkitWorldAdapter;
 import com.minegit.plugin.world.MainThreadExecutor;
 import com.minegit.plugin.world.WorldRepoRegistry;
+import java.time.Clock;
 import java.util.concurrent.Executor;
 import org.bukkit.World;
+import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
  * MineGit Spigot plugin entry point (Spec B §2).
  *
- * <p>This first slice is the scaffold: it boots, detects the server version, and selects the
- * version-appropriate {@code BlockBridge} for cross-version block I/O (Spec B §3). Commands and the
- * Bukkit {@code WorldAdapter} land in follow-up issues (#3–#7).
+ * <p>On enable it detects the server version, selects the version-appropriate {@code BlockBridge}
+ * (Spec B §3), binds the per-world {@code WorldAdapter}/repo registry (Spec B §4), and registers the
+ * {@code /minegit} dispatcher with its read-only/setup subcommands (Spec B §5, #45). The remaining
+ * subcommands ({@code commit}/{@code diff}/{@code checkout}) land in follow-up issues.
  */
 public final class MineGitPlugin extends JavaPlugin {
 
@@ -24,6 +30,7 @@ public final class MineGitPlugin extends JavaPlugin {
     private BlockBridge blockBridge;
     private WorldRepoRegistry worldRepos;
     private Executor mainThread;
+    private MessageService messages;
 
     @Override
     public void onEnable() {
@@ -36,8 +43,24 @@ public final class MineGitPlugin extends JavaPlugin {
         this.worldRepos = new WorldRepoRegistry(getDataFolder().toPath());
         // Reads/applies run on the server main thread; git work hops off via runTaskAsynchronously (#44).
         this.mainThread = new MainThreadExecutor(this, getServer().getScheduler());
+        // Adventure components on modern servers, legacy ChatColor on 1.8-era ones (#45, Spec B §5).
+        this.messages = MessageServices.detect();
+        registerCommands();
         getLogger().info("MineGit enabled on server version " + serverVersion
                 + " (" + (serverVersion.isLegacy() ? "legacy" : "modern") + " block bridge)");
+    }
+
+    /** Wires the {@code /minegit} dispatcher (+ tab completer) onto the command declared in plugin.yml. */
+    private void registerCommands() {
+        MineGitCommand command =
+                new MineGitCommand(worldRepos, this::adapterFor, Clock.systemUTC(), messages);
+        PluginCommand minegit = getCommand("minegit");
+        if (minegit != null) {
+            minegit.setExecutor(command);
+            minegit.setTabCompleter(command);
+        } else {
+            getLogger().warning("Command 'minegit' missing from plugin.yml; commands disabled");
+        }
     }
 
     @Override
