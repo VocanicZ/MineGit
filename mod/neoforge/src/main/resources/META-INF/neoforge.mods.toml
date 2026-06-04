@@ -10,7 +10,7 @@ displayName = "MineGit"
 description = '''
 Git-backed version control for Minecraft worlds — single-player capable (integrated server).
 '''
-authors = "MineGit"
+authors = "RainBowCreation, VocanicZ, NathanielSong"
 
 [[dependencies."${mod_id}"]]
 modId = "neoforge"

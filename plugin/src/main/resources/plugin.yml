@@ -1,7 +1,7 @@
 name: MineGit
-main: com.minegit.plugin.MineGitPlugin
+main: net.rainbowcreation.vocanicz.minegit.plugin.MineGitPlugin
 version: ${version}
-author: MineGit
+authors: [RainBowCreation, VocanicZ, NathanielSong]
 description: Version-control a live Minecraft world from in-game (git for your world).
 # api-version is deliberately omitted: declaring one (>=1.13) would stop the jar loading on 1.8-era
 # servers. Omitting it makes the server treat the plugin as legacy, which loads everywhere 1.8 -> latest.

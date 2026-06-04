@@ -4,12 +4,12 @@
   "version": "${version}",
   "name": "MineGit",
   "description": "Git-backed version control for Minecraft worlds — single-player capable (integrated server).",
-  "authors": ["MineGit"],
+  "authors": ["RainBowCreation", "VocanicZ", "NathanielSong"],
   "license": "MIT",
   "environment": "*",
   "entrypoints": {
-    "main": ["com.minegit.mod.MineGitFabric"],
-    "fabric-gametest": ["com.minegit.mod.MineGitFabricGameTest"]
+    "main": ["net.rainbowcreation.vocanicz.minegit.mod.MineGitFabric"],
+    "fabric-gametest": ["net.rainbowcreation.vocanicz.minegit.mod.MineGitFabricGameTest"]
   },
   "depends": {
     "fabricloader": ">=0.16",

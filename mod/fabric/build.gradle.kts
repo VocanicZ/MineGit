@@ -103,13 +103,13 @@ tasks {
         archiveClassifier.set("dev-shadow")
         // Relocate JGit + engine + JGit's transitives that Minecraft also ships, so the bundled
         // copies never collide with Minecraft's own log4j/slf4j/commons on the global classpath.
-        relocate("org.eclipse.jgit", "com.minegit.mod.libs.jgit")
-        relocate("org.apache.sshd", "com.minegit.mod.libs.sshd")
-        relocate("org.apache.commons", "com.minegit.mod.libs.commons")
-        relocate("com.googlecode.javaewah", "com.minegit.mod.libs.javaewah")
-        relocate("com.jcraft.jsch", "com.minegit.mod.libs.jsch")
-        relocate("com.minegit.core", "com.minegit.mod.libs.core")
-        relocate("com.minegit.protocol", "com.minegit.mod.libs.protocol")
+        relocate("org.eclipse.jgit", "net.rainbowcreation.vocanicz.minegit.mod.libs.jgit")
+        relocate("org.apache.sshd", "net.rainbowcreation.vocanicz.minegit.mod.libs.sshd")
+        relocate("org.apache.commons", "net.rainbowcreation.vocanicz.minegit.mod.libs.commons")
+        relocate("com.googlecode.javaewah", "net.rainbowcreation.vocanicz.minegit.mod.libs.javaewah")
+        relocate("com.jcraft.jsch", "net.rainbowcreation.vocanicz.minegit.mod.libs.jsch")
+        relocate("net.rainbowcreation.vocanicz.minegit.core", "net.rainbowcreation.vocanicz.minegit.mod.libs.core")
+        relocate("net.rainbowcreation.vocanicz.minegit.protocol", "net.rainbowcreation.vocanicz.minegit.mod.libs.protocol")
     }
 
     remapJar {

@@ -55,9 +55,9 @@ tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJ
     archiveClassifier.set("")
     // Relocate the engine + JGit out of their canonical packages so the single plugin jar never
     // collides with another plugin (or the server) that ships a different JGit / shaded copy.
-    relocate("org.eclipse.jgit", "com.minegit.plugin.libs.jgit")
-    relocate("com.minegit.core", "com.minegit.plugin.libs.core")
-    relocate("com.minegit.protocol", "com.minegit.plugin.libs.protocol")
+    relocate("org.eclipse.jgit", "net.rainbowcreation.vocanicz.minegit.plugin.libs.jgit")
+    relocate("net.rainbowcreation.vocanicz.minegit.core", "net.rainbowcreation.vocanicz.minegit.plugin.libs.core")
+    relocate("net.rainbowcreation.vocanicz.minegit.protocol", "net.rainbowcreation.vocanicz.minegit.plugin.libs.protocol")
 }
 
 // `build` should produce the runnable, relocated plugin jar.

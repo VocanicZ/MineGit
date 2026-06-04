@@ -61,7 +61,7 @@ MC ships its own log4j / slf4j on the mod classpath, and JGit drags in `slf4j`, 
 `javaewah`, etc. Shipping these unrelocated into a Fabric/NeoForge jar risks classpath clashes and
 duplicate-provider errors. Mitigation (handled in the scaffold issue, before any feature work):
 - **Relocate** `org.eclipse.jgit` and the engine packages into the mod's namespace
-  (e.g. `com/minegit/mod/libs/...`), mirroring what the plugin did (`com/minegit/plugin/libs/...`).
+  (e.g. `net/rainbowcreation/vocanicz/minegit/mod/libs/...`), mirroring what the plugin did (`net/rainbowcreation/vocanicz/minegit/plugin/libs/...`).
 - **Package the bundled libs per loader:** Fabric `include` (jar-in-jar) / NeoForge `jarJar`, so they are
   nested as mod-jar dependencies rather than flattened onto the global classpath.
 - Provide MC's logging facade so JGit's slf4j calls bind to a present implementation rather than a bundled

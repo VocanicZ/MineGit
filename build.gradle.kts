@@ -20,7 +20,7 @@ subprojects {
 
     apply(plugin = "java")
 
-    group = "com.minegit"
+    group = "net.rainbowcreation.vocanicz.minegit"
     version = "0.1.0-SNAPSHOT"
 
     repositories {

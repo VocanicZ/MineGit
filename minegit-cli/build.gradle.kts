@@ -12,5 +12,5 @@ dependencies {
 }
 
 application {
-    mainClass.set("com.minegit.cli.Main")
+    mainClass.set("net.rainbowcreation.vocanicz.minegit.cli.Main")
 }
