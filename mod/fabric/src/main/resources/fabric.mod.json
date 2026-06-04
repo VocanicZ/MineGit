@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${version}",
+  "name": "MineGit",
+  "description": "Git-backed version control for Minecraft worlds — single-player capable (integrated server).",
+  "authors": ["MineGit"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.minegit.mod.MineGitFabric"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16",
+    "minecraft": ">=1.21.11",
+    "java": ">=21",
+    "fabric-api": "*",
+    "architectury": "*"
+  }
+}
