@@ -6,6 +6,7 @@ import com.minegit.core.git.CommitInfo;
 import com.minegit.core.git.UnknownRefException;
 import com.minegit.core.model.WorldDiff;
 import com.minegit.mod.world.BackgroundExecutor;
+import com.minegit.mod.world.CheckoutService;
 import com.minegit.mod.world.CommitService;
 import com.minegit.mod.world.LevelRepoRegistry;
 import com.minegit.mod.world.MinecraftServerThread;
@@ -32,7 +33,8 @@ import net.minecraft.world.level.storage.LevelResource;
  * read/setup operation via {@link MineGitService}, and messages the result back as text {@link
  * Component}s (Spec D §4). Read/setup runs inline on the server thread (Brigadier dispatches there);
  * {@code commit} drives the throttled-read + off-thread-git dance via {@link CommitService} (Spec D
- * §5), and the world-mutating {@code checkout} arrives in a later batch.
+ * §5), and the op-gated {@code checkout} drives the snapshot → dirty-guard → throttled-apply dance
+ * via {@link CheckoutService}.
  *
  * <p>This class is the Minecraft-touching seam, so it is exercised by GameTests / manual play rather
  * than the headless unit tests — the engine path it drives is covered through {@link MineGitService}.
@@ -240,6 +242,52 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
             ctx.getSource().sendSuccess(() -> line, false);
         }
         return 1;
+    }
+
+    @Override
+    public int checkout(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            return notInGame(ctx);
+        }
+        ServerLevel level = player.level();
+        String levelKey = levelKey(level);
+        LevelRepoRegistry registry = registryFor(ctx.getSource().getServer());
+        if (!registry.isBound(levelKey)) {
+            return noRepo(ctx, levelKey);
+        }
+        String target = MineGitCommands.refOf(ctx);
+        boolean force = MineGitCommands.isForce(ctx);
+        WorldAdapter live = adapterFor(level);
+        Path repoPath = registry.repoPath(levelKey);
+        Executor serverThread = new ServerThreadScheduler(
+                new MinecraftServerThread(ctx.getSource().getServer()));
+        CheckoutService service = new CheckoutService(serverThread, background, CHUNKS_PER_TICK);
+
+        ctx.getSource().sendSuccess(
+                () -> MineGitText.notice("Checking out '" + target + "' in '" + levelKey + "'…"),
+                false);
+        // Snapshot + dirty-guard reads hop to the server thread, the plan/ref move runs off-thread,
+        // applies land back on the server thread (throttled), and completion messages the player there.
+        service.checkout(repoPath, live, clock, target, force,
+                result -> reportCheckout(ctx.getSource(), levelKey, target, result));
+        return 1;
+    }
+
+    /** Renders the throttled checkout outcome to the player (Spec D §4: live revert summary). */
+    private static void reportCheckout(
+            CommandSourceStack source, String levelKey, String target, CheckoutService.Result result) {
+        if (result.isError()) {
+            source.sendFailure(Component.literal(
+                    "Checkout failed for '" + levelKey + "': " + result.error().getMessage())
+                    .withStyle(ChatFormatting.RED));
+            return;
+        }
+        WorldDiff applied = result.applied();
+        source.sendSuccess(() -> Component.literal("Checked out ").withStyle(ChatFormatting.GREEN)
+                .append(Component.literal(target).withStyle(ChatFormatting.YELLOW))
+                .append(Component.literal(" — applied ").withStyle(ChatFormatting.GREEN))
+                .append(MineGitText.summary(applied)), false);
     }
 
     // ---- helpers ------------------------------------------------------------------------------

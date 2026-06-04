@@ -11,20 +11,26 @@ import org.junit.jupiter.api.Test;
 class SubcommandTest {
 
     @Test
-    void literalsAreTheReadSetupCommitDiffSetInOrder() {
-        assertEquals(Arrays.asList("init", "status", "commit", "log", "diff"), Subcommand.literals());
+    void literalsAreTheReadSetupCommitDiffCheckoutSetInOrder() {
+        assertEquals(Arrays.asList("init", "status", "commit", "log", "diff", "checkout"),
+                Subcommand.literals());
     }
 
     @Test
-    void readSetupAndCommitAreAvailableToEveryPlayer() {
-        // Spec D §4: read and commit are ungated (level 0); only checkout will gate at op.
+    void readSetupAndCommitAreAvailableToEveryPlayerButCheckoutGatesAtOp() {
+        // Spec D §4: read and commit are ungated (level 0); only the world-mutating checkout gates at op.
         for (Subcommand sub : Subcommand.values()) {
-            assertEquals(0, sub.permissionLevel(), sub + " should be ungated in this slice");
+            if (sub == Subcommand.CHECKOUT) {
+                assertEquals(Subcommand.OP_PERMISSION_LEVEL, sub.permissionLevel(),
+                        "checkout mutates the world — gate at op level " + Subcommand.OP_PERMISSION_LEVEL);
+            } else {
+                assertEquals(0, sub.permissionLevel(), sub + " should be ungated");
+            }
         }
     }
 
     @Test
-    void opSeamIsVanillaLevelTwoForLaterMutatingCommands() {
+    void opSeamIsVanillaLevelTwoForTheMutatingCheckout() {
         assertEquals(2, Subcommand.OP_PERMISSION_LEVEL);
     }
 
@@ -34,7 +40,9 @@ class SubcommandTest {
         assertSame(Subcommand.STATUS, Subcommand.byLiteral("STATUS"));
         assertSame(Subcommand.INIT, Subcommand.byLiteral("init"));
         assertSame(Subcommand.COMMIT, Subcommand.byLiteral("commit"));
-        assertNull(Subcommand.byLiteral("checkout"));
+        assertSame(Subcommand.CHECKOUT, Subcommand.byLiteral("checkout"));
+        assertSame(Subcommand.CHECKOUT, Subcommand.byLiteral("CHECKOUT"));
+        assertNull(Subcommand.byLiteral("rebase"));
         assertNull(Subcommand.byLiteral(null));
     }
 }

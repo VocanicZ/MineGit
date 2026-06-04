@@ -48,10 +48,19 @@ public final class MineGitCommands {
 
         int diff(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx)
                 throws CommandSyntaxException;
+
+        int checkout(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx)
+                throws CommandSyntaxException;
     }
 
     /** Brigadier argument name carrying the {@code /mg commit -m <message>} text. */
     static final String MESSAGE_ARG = "message";
+
+    /** Brigadier argument name carrying the {@code /mg checkout <ref>} target. */
+    static final String REF_ARG = "ref";
+
+    /** The {@code /mg checkout <ref> --force} flag literal that overrides the dirty-guard. */
+    static final String FORCE_FLAG = "--force";
 
     /** Message used when {@code /mg commit} is run with no {@code -m} text. */
     public static final String DEFAULT_COMMIT_MESSAGE = "Update world";
@@ -67,6 +76,25 @@ public final class MineGitCommands {
         } catch (IllegalArgumentException noArg) {
             return DEFAULT_COMMIT_MESSAGE;
         }
+    }
+
+    /** The {@code /mg checkout <ref>} target for {@code ctx} (the required {@link #REF_ARG} argument). */
+    public static String refOf(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx) {
+        return StringArgumentType.getString(ctx, REF_ARG);
+    }
+
+    /**
+     * Whether {@code /mg checkout <ref> --force} was typed: true iff the {@link #FORCE_FLAG} literal
+     * node was matched on the parsed path. Detecting the literal (rather than a boolean argument)
+     * keeps the bare {@code <ref>} form clean while the flag overrides the dirty-guard (Spec D §4).
+     */
+    public static boolean isForce(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx) {
+        for (com.mojang.brigadier.context.ParsedCommandNode<CommandSourceStack> node : ctx.getNodes()) {
+            if (FORCE_FLAG.equals(node.getNode().getName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Registers {@code /minegit} (+ aliases) on {@code dispatcher}, delegating to {@code runtime}. */
@@ -88,7 +116,28 @@ public final class MineGitCommands {
                 .then(subcommand(Subcommand.STATUS, runtime::status))
                 .then(commitSubcommand(runtime))
                 .then(subcommand(Subcommand.LOG, runtime::log))
-                .then(diffSubcommand(runtime));
+                .then(diffSubcommand(runtime))
+                .then(checkoutSubcommand(runtime));
+    }
+
+    /**
+     * The {@code checkout} literal: gated at op ({@link Subcommand#CHECKOUT}, level 2 — Spec D §4),
+     * runnable only with a target as {@code checkout <ref>} (force off) or {@code checkout <ref>
+     * --force} (overrides the dirty-guard). The bare literal carries no target and is intentionally
+     * not executable. Both runnable forms dispatch to {@code runtime.checkout}; the runtime reads the
+     * ref via {@link #refOf} and the flag via {@link #isForce}.
+     *
+     * <p>The ref is a {@linkplain StringArgumentType#string() quotable phrase} — bare hashes and
+     * branch names parse unquoted; a ref with Brigadier-reserved characters (e.g. {@code HEAD~1})
+     * must be quoted ({@code /mg checkout "HEAD~1"}).
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> checkoutSubcommand(Runtime runtime) {
+        Command<CommandSourceStack> action = runtime::checkout;
+        return Commands.literal(Subcommand.CHECKOUT.literal())
+                .requires(Commands.hasPermission(permissionCheck(Subcommand.CHECKOUT.permissionLevel())))
+                .then(Commands.argument(REF_ARG, StringArgumentType.string())
+                        .executes(action)
+                        .then(Commands.literal(FORCE_FLAG).executes(action)));
     }
 
     /**
