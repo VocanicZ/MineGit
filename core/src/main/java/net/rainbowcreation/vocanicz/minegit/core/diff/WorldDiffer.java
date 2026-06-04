@@ -52,6 +52,21 @@ public final class WorldDiffer {
         return diff(ChunkSources.tree(repo, "HEAD"), ChunkSources.live(adapter));
     }
 
+    /**
+     * Diffs only the dirty chunks ({@link net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter#peekDirty()})
+     * against the committed {@code HEAD}. Chunks not in the dirty set are known to be unchanged by
+     * construction (they have not been touched since the last drain), so they are skipped entirely —
+     * that is the performance win over {@link #diffWorkingTree}.
+     *
+     * <p>Argument order matches {@link #diffWorkingTree}: tree is "before" (a), live is "after" (b),
+     * so ADD/REMOVE/CHANGE polarity is identical.
+     */
+    public static WorldDiff diffWorkingTreeDirty(MineGitRepo repo, WorldAdapter adapter) {
+        Objects.requireNonNull(repo, "repo");
+        Objects.requireNonNull(adapter, "adapter");
+        return diff(ChunkSources.tree(repo, "HEAD"), ChunkSources.liveDirty(adapter));
+    }
+
     /** Diffs two committed revisions, {@code revA} (before) against {@code revB} (after). */
     public static WorldDiff diffRefs(MineGitRepo repo, String revA, String revB) {
         Objects.requireNonNull(repo, "repo");

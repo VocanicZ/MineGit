@@ -34,6 +34,51 @@ public final class ChunkSources {
         return new TreeChunkSource(repo, rev);
     }
 
+    /**
+     * A {@link ChunkSource} reading only the chunks currently marked dirty in {@code adapter}, via
+     * {@link WorldAdapter#peekDirty()} (non-clearing). Chunks absent from the dirty set are not
+     * enumerated, so the diff engine skips them entirely — that is the speedup.
+     */
+    public static ChunkSource liveDirty(WorldAdapter adapter) {
+        return new LiveDirtyChunkSource(adapter);
+    }
+
+    /** Dirty-only live source: chunk positions come from {@link WorldAdapter#peekDirty()}. */
+    private static final class LiveDirtyChunkSource implements ChunkSource {
+
+        private final WorldAdapter adapter;
+
+        LiveDirtyChunkSource(WorldAdapter adapter) {
+            this.adapter = Objects.requireNonNull(adapter, "adapter");
+        }
+
+        @Override
+        public Set<DimensionId> dimensions() {
+            Set<DimensionId> dims = new HashSet<DimensionId>();
+            for (ChunkRef ref : adapter.peekDirty()) {
+                dims.add(ref.getDimension());
+            }
+            return dims;
+        }
+
+        @Override
+        public Set<ChunkPos> chunks(DimensionId dimension) {
+            Objects.requireNonNull(dimension, "dimension");
+            Set<ChunkPos> out = new HashSet<ChunkPos>();
+            for (ChunkRef ref : adapter.peekDirty()) {
+                if (ref.getDimension().equals(dimension)) {
+                    out.add(ref.getPos());
+                }
+            }
+            return out;
+        }
+
+        @Override
+        public NormalizedChunk read(DimensionId dimension, ChunkPos pos) {
+            return adapter.read(dimension, pos);
+        }
+    }
+
     /** Live source: chunk positions come from {@link WorldAdapter#allChunks()}. */
     private static final class LiveChunkSource implements ChunkSource {
 
