@@ -8,7 +8,8 @@
   "license": "MIT",
   "environment": "*",
   "entrypoints": {
-    "main": ["com.minegit.mod.MineGitFabric"]
+    "main": ["com.minegit.mod.MineGitFabric"],
+    "fabric-gametest": ["com.minegit.mod.MineGitFabricGameTest"]
   },
   "depends": {
     "fabricloader": ">=0.16",

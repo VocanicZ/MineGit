@@ -67,6 +67,27 @@ dependencies {
     }
     shadowBundle(project(":core"), engineExcludes)
     shadowBundle(project(":protocol"), engineExcludes)
+
+    // Dev/GameTest runs use exploded classes, not the shadow jar, so the engine + JGit must be on
+    // the run's runtime classpath too (production gets them relocated via shadowBundle). slf4j is
+    // excluded so JGit binds to the slf4j Minecraft already ships in dev rather than duplicating it.
+    runtimeOnly(project(":core"), engineExcludes)
+    runtimeOnly(project(":protocol"), engineExcludes)
+}
+
+// Headless GameTest run (Spec D §6, issue #64): boots a dedicated server with Fabric's GameTest
+// runner enabled, runs every @GameTest, writes a JUnit report, and exits non-zero on failure.
+// Invoke with `./gradlew :mod:fabric:runGametest`.
+loom {
+    runs {
+        create("gametest") {
+            server()
+            ideConfigGenerated(false)
+            vmArg("-Dfabric-api.gametest")
+            vmArg("-Dfabric-api.gametest.report-file=${layout.buildDirectory.get().asFile}/junit.xml")
+            runDir("build/gametest")
+        }
+    }
 }
 
 tasks {
