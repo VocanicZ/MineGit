@@ -1,0 +1,2 @@
+[07:47:49] [Test worker/INFO]: getOrCreateProvider(EdDSA) created instance of net.i2p.crypto.eddsa.EdDSASecurityProvider
+[07:47:50] [Test worker/INFO]: No detected/configured IoServiceFactoryFactory using Nio2ServiceFactoryFactory
