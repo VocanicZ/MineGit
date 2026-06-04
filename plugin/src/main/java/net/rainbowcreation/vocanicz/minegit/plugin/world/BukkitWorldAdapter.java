@@ -1,6 +1,7 @@
 package net.rainbowcreation.vocanicz.minegit.plugin.world;
 
 import net.rainbowcreation.vocanicz.minegit.core.adapter.ChunkRef;
+import net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet;
 import net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.core.model.BlockChange;
 import net.rainbowcreation.vocanicz.minegit.core.model.BlockState;
@@ -43,14 +44,23 @@ public final class BukkitWorldAdapter implements WorldAdapter {
     private final DimensionId dimension;
     private final int minSection;
     private final int sectionCount;
+    private final DirtyChunkSet dirty;
+
+    /** Creates an adapter with no event-based dirty tracking; the dirty methods fall back to all loaded chunks. */
+    public BukkitWorldAdapter(World world, BlockBridge bridge) {
+        this(world, bridge, null);
+    }
 
     /**
      * Binds the adapter to {@code world}, deriving its dimension from the world environment and its
      * vertical section range from the world height. The build range spans
      * {@code [getMinHeight(), getMaxHeight())} — {@code getMinHeight()} is read reflectively because
      * it is absent from the 1.8.8 API (pre-1.18 worlds start at Y=0).
+     *
+     * @param dirty the per-world dirty set, or {@code null} for no event-based tracking (the dirty
+     *     methods then fall back to {@link #allChunks()})
      */
-    public BukkitWorldAdapter(World world, BlockBridge bridge) {
+    public BukkitWorldAdapter(World world, BlockBridge bridge, DirtyChunkSet dirty) {
         this.world = Objects.requireNonNull(world, "world");
         this.bridge = Objects.requireNonNull(bridge, "bridge");
         this.dimension = dimensionOf(world);
@@ -58,6 +68,7 @@ public final class BukkitWorldAdapter implements WorldAdapter {
         int maxHeight = world.getMaxHeight();
         this.minSection = Math.floorDiv(minHeight, SECTION_SIZE);
         this.sectionCount = Math.max(1, (maxHeight - minHeight) / SECTION_SIZE);
+        this.dirty = dirty; // nullable — null means "no event-based tracking"
     }
 
     /** The dimension this world maps to (overworld / the_nether / the_end). */
@@ -81,15 +92,16 @@ public final class BukkitWorldAdapter implements WorldAdapter {
 
     @Override
     public Set<ChunkRef> drainDirty() {
-        // First slice: no event-based dirty set. The loaded chunks are the candidate set; the engine
-        // dedupes unchanged ones by content. Event tracking is the immediate follow-up (Spec B §4).
-        return allChunks();
+        // With a dirty set, only the chunks marked since the last drain are returned (and cleared).
+        // Without one, fall back to the loaded chunks and let the engine dedupe unchanged ones.
+        return dirty != null ? dirty.drainDirty() : allChunks();
     }
 
     @Override
     public Set<ChunkRef> peekDirty() {
-        // Placeholder until event-based dirty tracking is wired (Spec E task 5).
-        return allChunks();
+        // With a dirty set, return the current dirty chunks without clearing them. Without one, fall
+        // back to the loaded chunks.
+        return dirty != null ? dirty.peekDirty() : allChunks();
     }
 
     @Override

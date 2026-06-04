@@ -1,5 +1,6 @@
 package net.rainbowcreation.vocanicz.minegit.plugin.command;
 
+import net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet;
 import net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.core.diff.WorldDiffer;
 import net.rainbowcreation.vocanicz.minegit.core.git.Author;
@@ -11,6 +12,7 @@ import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.Actor;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CommitService;
+import net.rainbowcreation.vocanicz.minegit.plugin.world.WorldDirtyRegistry;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.WorldRepoRegistry;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -62,11 +64,13 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         p.put("commit", PERM_USE);
         p.put("log", PERM_USE);
         p.put("diff", PERM_USE);
+        p.put("rescan", PERM_USE);
         p.put("checkout", PERM_ADMIN);
         PERMISSIONS = p;
     }
 
     private final WorldRepoRegistry repos;
+    private final WorldDirtyRegistry worldDirty;
     private final Function<World, WorldAdapter> adapters;
     private final Clock clock;
     private final MessageService messages;
@@ -75,12 +79,14 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
 
     public MineGitCommand(
             WorldRepoRegistry repos,
+            WorldDirtyRegistry worldDirty,
             Function<World, WorldAdapter> adapters,
             Clock clock,
             MessageService messages,
             CommitService commitService,
             CheckoutService checkoutService) {
         this.repos = Objects.requireNonNull(repos, "repos");
+        this.worldDirty = Objects.requireNonNull(worldDirty, "worldDirty");
         this.adapters = Objects.requireNonNull(adapters, "adapters");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.messages = Objects.requireNonNull(messages, "messages");
@@ -116,6 +122,8 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
                 return doLog(sender);
             case "diff":
                 return doDiff(sender, args);
+            case "rescan":
+                return doRescan(sender);
             case "checkout":
                 return doCheckout(sender, args);
             default:
@@ -201,12 +209,29 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         }
         WorldAdapter adapter = adapters.apply(world);
         try (MineGitRepo repo = MineGitRepo.open(repos.repoPath(name), adapter, clock)) {
-            WorldDiff diff = WorldDiffer.diffWorkingTree(repo, adapter);
+            WorldDiff diff = workingTreeDiff(repo, adapter, name);
             messages.send(sender,
                     ChatColor.GOLD + "Status " + ChatColor.GRAY + name + ": "
                             + MineGitFormat.summary(diff));
         }
         return true;
+    }
+
+    /**
+     * The primed-aware working-tree-vs-HEAD diff for {@code worldName}. When the world's tracker is
+     * primed, only the dirty chunks are compared ({@link WorldDiffer#diffWorkingTreeDirty}) for a fast
+     * incremental result; otherwise a full diff is run ({@link WorldDiffer#diffWorkingTree}).
+     *
+     * <p><strong>Status/diff never prime — only commit establishes the primed baseline.</strong>
+     * Priming here would make a later commit trust a dirty set whose starting snapshot was never
+     * recorded as a committed baseline, silently missing changes that occurred before the session began.
+     */
+    private WorldDiff workingTreeDiff(MineGitRepo repo, WorldAdapter adapter, String worldName) {
+        DirtyChunkSet tracker = worldDirty.tracker(worldName);
+        if (tracker.isPrimed()) {
+            return WorldDiffer.diffWorkingTreeDirty(repo, adapter);
+        }
+        return WorldDiffer.diffWorkingTree(repo, adapter);
     }
 
     private boolean doCommit(CommandSender sender, String[] args) {
@@ -229,11 +254,27 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         WorldAdapter live = adapters.apply(world);
         Path path = repos.repoPath(name);
         Author author = authorFor(Actor.fromPlayer(player));
+        DirtyChunkSet tracker = worldDirty.tracker(name);
+        // --full forces a one-off full reconciliation pass: unprime so the commit re-scans every chunk
+        // instead of trusting the dirty set, then re-primes for subsequent incremental commits.
+        if (hasFlag(args, "--full")) {
+            tracker.unprime();
+        }
         messages.send(sender, ChatColor.GRAY + "Committing '" + name + "'…");
         // Reads hop to the main thread (throttled), git runs async, completion lands back on main.
-        commitService.commit(path, live, clock, message, author,
+        commitService.commit(path, live, clock, message, author, tracker,
                 result -> reportCommit(sender, name, result));
         return true;
+    }
+
+    /** Whether {@code args} (skipping the subcommand at index 0) contains {@code flag}. */
+    private static boolean hasFlag(String[] args, String flag) {
+        for (int i = 1; i < args.length; i++) {
+            if (args[i].equals(flag)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Renders the async commit outcome to the player (Spec B §6: "message on completion"). */
@@ -310,7 +351,7 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         WorldAdapter adapter = adapters.apply(world);
         try (MineGitRepo repo = MineGitRepo.open(repos.repoPath(name), adapter, clock)) {
             WorldDiff diff = args.length == 1
-                    ? WorldDiffer.diffWorkingTree(repo, adapter)
+                    ? workingTreeDiff(repo, adapter, name)
                     : WorldDiffer.diffRefs(repo, args[1], args[2]);
             String scope = args.length == 1 ? name : args[1] + ".." + args[2];
             messages.send(sender, ChatColor.GOLD + "Diff " + ChatColor.GRAY + scope + ":");
@@ -322,6 +363,24 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
             // against an empty tree.
             messages.send(sender, ChatColor.RED + e.getMessage());
         }
+        return true;
+    }
+
+    /**
+     * Forces the next status/commit to do a full reconciliation pass by unpriming the world's dirty
+     * tracker. Use after the dirty set may have missed changes (e.g. an external edit), so the engine
+     * re-scans every chunk once before trusting event-based tracking again.
+     */
+    private boolean doRescan(CommandSender sender) {
+        Player player = requirePlayer(sender);
+        if (player == null) {
+            return true;
+        }
+        String name = player.getWorld().getName();
+        worldDirty.tracker(name).unprime();
+        messages.send(sender,
+                ChatColor.GREEN + "Rescan armed for '" + name + "'. "
+                        + ChatColor.GRAY + "The next commit will do a full pass.");
         return true;
     }
 
@@ -381,6 +440,10 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
                     ChatColor.RED + "Checkout failed for '" + world + "': " + error.getMessage());
             return;
         }
+        // HEAD moved to a new baseline, so the accumulated dirty set no longer reflects working-vs-HEAD.
+        // Unprime (success only) so the next commit/status reconciles against the new baseline with a
+        // full pass before trusting event-based tracking again.
+        worldDirty.tracker(world).unprime();
         WorldDiff applied = result.applied();
         messages.send(sender,
                 ChatColor.GREEN + "Checked out " + ChatColor.YELLOW + ref

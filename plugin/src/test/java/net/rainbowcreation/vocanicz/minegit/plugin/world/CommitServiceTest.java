@@ -66,7 +66,7 @@ class CommitServiceTest {
 
         AtomicReference<CommitService.Result> result = new AtomicReference<CommitService.Result>();
         service.commit(repoDir, world, clock, "build a tower", new Author("Steve", "steve@players.minegit.local"),
-                result::set);
+                null, result::set);
 
         CommitService.Result r = result.get();
         assertNotNull(r, "completion callback fired");
@@ -102,7 +102,7 @@ class CommitServiceTest {
 
         AtomicReference<CommitService.Result> result = new AtomicReference<CommitService.Result>();
         service.commit(repoDir, world, clock, "spread", new Author("Steve", "steve@players.minegit.local"),
-                result::set);
+                null, result::set);
 
         assertNotNull(result.get().commit());
         // 3 chunks at 1/tick => at least 3 main-thread read passes (plus the completion hop).
@@ -121,11 +121,52 @@ class CommitServiceTest {
         CommitService service = new CommitService(new RecordingExecutor(), new RecordingExecutor(), 16);
         AtomicReference<CommitService.Result> result = new AtomicReference<CommitService.Result>();
         service.commit(repoDir, world, clock, "nothing changed",
-                new Author("Steve", "steve@players.minegit.local"), result::set);
+                new Author("Steve", "steve@players.minegit.local"), null, result::set);
 
         CommitService.Result r = result.get();
         assertFalse(r.isError());
         assertNull(r.commit(), "no delta => no commit");
+    }
+
+    @Test
+    void firstCommitPrimesTheTrackerAndCapturesAllChunks() {
+        net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet tracker =
+                new net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet();
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        world.setBlock(DimensionId.OVERWORLD, 1, 64, 2, new BlockState("minecraft:stone"));
+        initRepo(world).close();
+
+        CommitService service = new CommitService(new RecordingExecutor(), new RecordingExecutor(), 16);
+        AtomicReference<CommitService.Result> result = new AtomicReference<CommitService.Result>();
+        // Not primed: a full scan runs and the tracker is primed for subsequent incremental commits.
+        service.commit(repoDir, world, clock, "full first pass",
+                new Author("Steve", "steve@players.minegit.local"), tracker, result::set);
+
+        assertFalse(result.get().isError());
+        assertTrue(tracker.isPrimed(), "first commit primes the tracker");
+    }
+
+    @Test
+    void primedCommitSnapshotsOnlyTheDirtyChunks() {
+        net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet tracker =
+                new net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet();
+        tracker.prime(); // already reconciled; trust the dirty set exclusively
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        world.setBlock(DimensionId.OVERWORLD, 1, 64, 2, new BlockState("minecraft:stone"));
+        initRepo(world).close();
+        // The init snapshot already recorded the stone; with a primed tracker and an empty dirty set
+        // (no edits since), the commit drains nothing and produces no new commit.
+        world.drainDirty(); // clear the adapter's own dirty set so the primed drain is empty
+
+        CommitService service = new CommitService(new RecordingExecutor(), new RecordingExecutor(), 16);
+        AtomicReference<CommitService.Result> result = new AtomicReference<CommitService.Result>();
+        service.commit(repoDir, world, clock, "incremental",
+                new Author("Steve", "steve@players.minegit.local"), tracker, result::set);
+
+        CommitService.Result r = result.get();
+        assertFalse(r.isError());
+        assertNull(r.commit(), "primed commit with an empty dirty set captures nothing => no commit");
+        assertTrue(tracker.isPrimed(), "tracker stays primed");
     }
 
     @Test
@@ -146,7 +187,7 @@ class CommitServiceTest {
         };
         CommitService service = new CommitService(main, async, 16);
         service.commit(repoDir, world, clock, "ordered",
-                new Author("Steve", "steve@players.minegit.local"), r -> {});
+                new Author("Steve", "steve@players.minegit.local"), null, r -> {});
 
         assertEquals("main", order.get(0), "first hop is a main-thread read pass");
         assertTrue(order.contains("async"), "git step is dispatched to async");

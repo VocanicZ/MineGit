@@ -19,6 +19,7 @@ import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
 import net.rainbowcreation.vocanicz.minegit.core.model.NormalizedChunk;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CommitService;
+import net.rainbowcreation.vocanicz.minegit.plugin.world.WorldDirtyRegistry;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.WorldRepoRegistry;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -113,12 +114,15 @@ class MineGitCommandTest {
     /** Override per-test to give a world real content (so commit produces a non-empty commit). */
     private Function<World, WorldAdapter> adapters = w -> new EmptyAdapter();
 
+    /** Override per-test to share a specific dirty registry (e.g. to assert priming/unpriming). */
+    private WorldDirtyRegistry worldDirty = new WorldDirtyRegistry();
+
     private MineGitCommand command() {
         WorldRepoRegistry repos = new WorldRepoRegistry(dataFolder);
         Clock clock = Clock.fixed(Instant.ofEpochSecond(1780576496L), ZoneOffset.UTC);
         CommitService commits = new CommitService(INLINE, INLINE, 16);
         CheckoutService checkouts = new CheckoutService(INLINE, INLINE, 16);
-        return new MineGitCommand(repos, adapters, clock, messages, commits, checkouts);
+        return new MineGitCommand(repos, worldDirty, adapters, clock, messages, commits, checkouts);
     }
 
     private Player player(String worldName) {
@@ -519,6 +523,88 @@ class MineGitCommandTest {
         Player p = nonAdminPlayer("world");
         List<String> completions = command().onTabComplete(p, null, "mg", new String[] {"che"});
         assertFalse(completions.contains("checkout"), "no minegit.admin -> no checkout offered");
+    }
+
+    @Test
+    void firstCommitPrimesTheWorldsTracker() {
+        FakeWorldAdapter live = new FakeWorldAdapter();
+        live.setBlock(DimensionId.OVERWORLD, 1, 64, 2, new BlockState("minecraft:stone"));
+        adapters = w -> live;
+
+        Player p = player("world");
+        dispatch(p, "init");
+        assertFalse(worldDirty.tracker("world").isPrimed(), "fresh tracker is not primed");
+
+        dispatch(p, "commit", "-m", "first");
+
+        assertTrue(worldDirty.tracker("world").isPrimed(), "the first commit primes the world tracker");
+    }
+
+    @Test
+    void commitFullUnprimesBeforeCommitting() {
+        FakeWorldAdapter live = new FakeWorldAdapter();
+        live.setBlock(DimensionId.OVERWORLD, 1, 64, 2, new BlockState("minecraft:stone"));
+        adapters = w -> live;
+
+        Player p = player("world");
+        dispatch(p, "init");
+        worldDirty.tracker("world").prime();
+
+        // --full forces a full reconciliation pass; the commit re-primes afterwards, so the observable
+        // effect is that the commit ran a full scan (it stays primed at the end).
+        dispatch(p, "commit", "--full", "-m", "rescan-commit");
+
+        assertTrue(worldDirty.tracker("world").isPrimed(), "commit re-primes after the full pass");
+    }
+
+    @Test
+    void rescanUnprimesTheWorldsTracker() {
+        Player p = player("world");
+        dispatch(p, "init");
+        worldDirty.tracker("world").prime();
+        messages.lines.clear();
+
+        boolean handled = dispatch(p, "rescan");
+
+        assertTrue(handled);
+        assertFalse(worldDirty.tracker("world").isPrimed(), "rescan unprimes the world tracker");
+        assertTrue(messages.anyContains("Rescan"), "player told the rescan was armed");
+    }
+
+    @Test
+    void rescanAppearsInTabCompletion() {
+        Player p = player("world");
+        List<String> completions = command().onTabComplete(p, null, "mg", new String[] {"resc"});
+        assertTrue(completions.contains("rescan"), "'resc' completes to rescan");
+    }
+
+    @Test
+    void rescanDeniedWithoutUsePermission() {
+        Player p = nonAdminPlayer("world");
+        lenient().when(p.hasPermission(MineGitCommand.PERM_USE)).thenReturn(false);
+
+        dispatch(p, "rescan");
+
+        assertTrue(messages.anyContains("permission"), "rescan requires minegit.use");
+    }
+
+    @Test
+    void successfulCheckoutUnprimesTheWorldsTracker() {
+        FakeWorldAdapter live = new FakeWorldAdapter();
+        live.setBlock(DimensionId.OVERWORLD, 0, 64, 0, new BlockState("minecraft:stone"));
+        adapters = w -> live;
+
+        Player p = player("world");
+        dispatch(p, "init");
+        dispatch(p, "commit", "-m", "A"); // primes the tracker
+        live.setBlock(DimensionId.OVERWORLD, 100, 64, 0, new BlockState("minecraft:dirt"));
+        dispatch(p, "commit", "-m", "B");
+        assertTrue(worldDirty.tracker("world").isPrimed(), "tracker primed after commits");
+
+        dispatch(p, "checkout", "HEAD~1");
+
+        assertFalse(worldDirty.tracker("world").isPrimed(),
+                "a successful checkout unprimes so the next pass reconciles against the new baseline");
     }
 
     @Test

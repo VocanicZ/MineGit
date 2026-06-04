@@ -1,6 +1,7 @@
 package net.rainbowcreation.vocanicz.minegit.plugin.world;
 
 import net.rainbowcreation.vocanicz.minegit.core.adapter.ChunkRef;
+import net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet;
 import net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.core.git.Author;
 import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
@@ -92,8 +93,12 @@ public final class CommitService {
     }
 
     /**
-     * Snapshots {@code live}'s loaded chunks and commits them to the repo at {@code repoPath} as
-     * {@code author}. {@code onComplete} is invoked on the main thread with the {@link Result}.
+     * Snapshots {@code live}'s chunks and commits them to the repo at {@code repoPath} as
+     * {@code author}. When {@code tracker} is primed, only the dirty chunks are snapshot; on the first
+     * call (not primed) a full scan is done and the tracker is primed for subsequent calls.
+     * {@code onComplete} is invoked on the main thread with the {@link Result}.
+     *
+     * @param tracker the per-world dirty set, or {@code null} to always do a full scan
      */
     public void commit(
             Path repoPath,
@@ -101,6 +106,7 @@ public final class CommitService {
             Clock clock,
             String message,
             Author author,
+            DirtyChunkSet tracker,
             Consumer<Result> onComplete) {
         Objects.requireNonNull(repoPath, "repoPath");
         Objects.requireNonNull(live, "live");
@@ -108,7 +114,7 @@ public final class CommitService {
         Objects.requireNonNull(message, "message");
         Objects.requireNonNull(author, "author");
         Objects.requireNonNull(onComplete, "onComplete");
-        mainThread.execute(() -> snapshotBegin(repoPath, live, clock, message, author, onComplete));
+        mainThread.execute(() -> snapshotBegin(repoPath, live, clock, message, author, tracker, onComplete));
     }
 
     private void snapshotBegin(
@@ -117,8 +123,18 @@ public final class CommitService {
             Clock clock,
             String message,
             Author author,
+            DirtyChunkSet tracker,
             Consumer<Result> onComplete) {
-        List<ChunkRef> refs = new ArrayList<ChunkRef>(live.allChunks());
+        List<ChunkRef> refs;
+        if (tracker != null && tracker.isPrimed()) {
+            refs = new ArrayList<ChunkRef>(live.drainDirty());
+        } else {
+            refs = new ArrayList<ChunkRef>(live.allChunks());
+            live.drainDirty(); // consume so next incremental drain is clean
+            if (tracker != null) {
+                tracker.prime();
+            }
+        }
         Set<DimensionId> dims = live.dimensions();
         Map<ChunkRef, NormalizedChunk> captured = new HashMap<ChunkRef, NormalizedChunk>();
         snapshotBatch(refs, 0, captured, dims, repoPath, live, clock, message, author, onComplete);

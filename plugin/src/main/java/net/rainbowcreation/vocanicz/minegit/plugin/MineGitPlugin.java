@@ -12,6 +12,7 @@ import net.rainbowcreation.vocanicz.minegit.plugin.world.BukkitWorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CommitService;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.MainThreadExecutor;
+import net.rainbowcreation.vocanicz.minegit.plugin.world.WorldDirtyRegistry;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.WorldRepoRegistry;
 import java.time.Clock;
 import java.util.concurrent.Executor;
@@ -33,6 +34,7 @@ public final class MineGitPlugin extends JavaPlugin {
     private ServerVersion serverVersion;
     private BlockBridge blockBridge;
     private WorldRepoRegistry worldRepos;
+    private WorldDirtyRegistry worldDirty;
     private Executor mainThread;
     private CommitService commitService;
     private CheckoutService checkoutService;
@@ -47,6 +49,9 @@ public final class MineGitPlugin extends JavaPlugin {
         this.blockBridge = BlockBridges.forVersion(serverVersion, new LegacyBlockMapper());
         // One repo per world under plugins/MineGit/repos/<world>; bindings persist across restarts (#44).
         this.worldRepos = new WorldRepoRegistry(getDataFolder().toPath());
+        // One dirty set per world, shared by the adapter factory, commit/status, and the event listener
+        // (Spec E task 5); the same instance must be used everywhere so events accumulate across commands.
+        this.worldDirty = new WorldDirtyRegistry();
         // Reads/applies run on the server main thread; git work hops off via runTaskAsynchronously (#44).
         this.mainThread = new MainThreadExecutor(this, getServer().getScheduler());
         // commit (#46): throttled main-thread reads -> async serialize+git -> completion on main thread.
@@ -66,7 +71,7 @@ public final class MineGitPlugin extends JavaPlugin {
     /** Wires the {@code /minegit} dispatcher (+ tab completer) onto the command declared in plugin.yml. */
     private void registerCommands() {
         MineGitCommand command = new MineGitCommand(
-                worldRepos, this::adapterFor, Clock.systemUTC(), messages, commitService,
+                worldRepos, worldDirty, this::adapterFor, Clock.systemUTC(), messages, commitService,
                 checkoutService);
         PluginCommand minegit = getCommand("minegit");
         if (minegit != null) {
@@ -112,13 +117,25 @@ public final class MineGitPlugin extends JavaPlugin {
         return worldRepos;
     }
 
+    /**
+     * The per-world dirty-set registry: one {@code DirtyChunkSet} per Bukkit world, shared by the
+     * adapter factory, commit/status, and the block-change listener (Spec E task 5). Exposed so Task 6's
+     * event listener can be registered against the very same registry instance.
+     */
+    public WorldDirtyRegistry worldDirty() {
+        return worldDirty;
+    }
+
     /** An executor that runs tasks on the server main thread (Spec B §6). */
     public Executor mainThread() {
         return mainThread;
     }
 
-    /** Builds a {@link BukkitWorldAdapter} bound to {@code world} using the selected block bridge. */
+    /**
+     * Builds a {@link BukkitWorldAdapter} bound to {@code world} using the selected block bridge and the
+     * world's shared dirty set, so per-command adapters all read the same accumulating dirty state.
+     */
     public BukkitWorldAdapter adapterFor(World world) {
-        return new BukkitWorldAdapter(world, blockBridge);
+        return new BukkitWorldAdapter(world, blockBridge, worldDirty.tracker(world.getName()));
     }
 }
