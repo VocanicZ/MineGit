@@ -60,6 +60,15 @@ public final class DirtyTracking {
     }
 
     /**
+     * Whether a registry has been {@linkplain #install installed}. A cheap guard the mixin hot path
+     * (every block change, including worldgen) checks <em>before</em> building the level-key string, so
+     * a server with no MineGit repo pays only a volatile read per block change, not a string alloc.
+     */
+    public static boolean isInstalled() {
+        return registry != null;
+    }
+
+    /**
      * The registry currently {@linkplain #install installed}, or {@code null} if none has been. Lets a
      * GameTest read back the <em>same</em> {@link DirtyTrackerRegistry} the {@code setBlockState} mixin
      * writes to, so a real block change can be asserted end to end (mixin → {@link #markDirty}).

@@ -68,7 +68,12 @@ public final class ServerLevelAccess implements LevelAccess {
      * the per-command adapter.
      */
     public static void markDirty(ServerLevel level, int blockX, int blockZ) {
-        DirtyTracking.markDirty(levelKeyOf(level), dimensionOf(level), blockX, blockZ);
+        if (!DirtyTracking.isInstalled()) {
+            return; // hot path: no MineGit registry yet — skip the level-key string + DimensionId work
+        }
+        String levelKey = levelKeyOf(level);
+        DimensionId dimension = DimensionMapping.fromKey(levelKey); // reuse the key — no second toString
+        DirtyTracking.markDirty(levelKey, dimension, blockX, blockZ);
     }
 
     @Override
