@@ -4,9 +4,11 @@ import net.rainbowcreation.vocanicz.minegit.core.adapter.ChunkRef;
 import net.rainbowcreation.vocanicz.minegit.core.model.ChunkPos;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.BukkitWorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.WorldDirtyRegistry;
+import java.util.List;
 import java.util.Objects;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -134,17 +136,28 @@ public final class BlockChangeListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPistonExtend(BlockPistonExtendEvent event) {
-        mark(event.getBlock());
-        for (Block block : event.getBlocks()) {
-            mark(block);
-        }
+        markPiston(event.getBlock(), event.getBlocks(), event.getDirection());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPistonRetract(BlockPistonRetractEvent event) {
-        mark(event.getBlock());
-        for (Block block : event.getBlocks()) {
+        markPiston(event.getBlock(), event.getBlocks(), event.getDirection());
+    }
+
+    /**
+     * Marks the piston block, every moved block, and each moved block's <em>destination</em> cell. A
+     * block pushed across a chunk boundary changes a chunk that {@code getBlocks()} does not contain, so
+     * marking only the moved blocks would leave that destination chunk's edge un-tracked (under-marking
+     * — the one unsafe direction). We mark the neighbor in both the move direction and its opposite so
+     * the destination is covered regardless of extend/retract direction semantics; over-marking a chunk
+     * is always safe (the engine diffs and skips unchanged chunks).
+     */
+    private void markPiston(Block piston, List<Block> moved, BlockFace direction) {
+        mark(piston);
+        for (Block block : moved) {
             mark(block);
+            mark(block.getRelative(direction));
+            mark(block.getRelative(direction.getOppositeFace()));
         }
     }
 }
