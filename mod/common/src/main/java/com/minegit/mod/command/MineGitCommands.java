@@ -39,8 +39,30 @@ public final class MineGitCommands {
         int status(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx)
                 throws CommandSyntaxException;
 
+        int commit(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx)
+                throws CommandSyntaxException;
+
         int log(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx)
                 throws CommandSyntaxException;
+    }
+
+    /** Brigadier argument name carrying the {@code /mg commit -m <message>} text. */
+    static final String MESSAGE_ARG = "message";
+
+    /** Message used when {@code /mg commit} is run with no {@code -m} text. */
+    public static final String DEFAULT_COMMIT_MESSAGE = "Update world";
+
+    /**
+     * The commit message for {@code ctx}: the greedy {@code -m} argument when present, else {@link
+     * #DEFAULT_COMMIT_MESSAGE}. The bare {@code /mg commit} form parses without the argument, so the
+     * lookup falls back rather than throwing.
+     */
+    public static String messageOf(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx) {
+        try {
+            return com.mojang.brigadier.arguments.StringArgumentType.getString(ctx, MESSAGE_ARG);
+        } catch (IllegalArgumentException noArg) {
+            return DEFAULT_COMMIT_MESSAGE;
+        }
     }
 
     /** Registers {@code /minegit} (+ aliases) on {@code dispatcher}, delegating to {@code runtime}. */
@@ -60,7 +82,24 @@ public final class MineGitCommands {
                 .executes(MineGitCommands::usage)
                 .then(subcommand(Subcommand.INIT, runtime::init))
                 .then(subcommand(Subcommand.STATUS, runtime::status))
+                .then(commitSubcommand(runtime))
                 .then(subcommand(Subcommand.LOG, runtime::log));
+    }
+
+    /**
+     * The {@code commit} literal: gated like any subcommand, runnable bare ({@link
+     * #DEFAULT_COMMIT_MESSAGE}) and as {@code commit -m <message...>} where {@code message} greedily
+     * captures the rest of the line (Spec D §4). Both forms dispatch to {@code runtime.commit}; the
+     * runtime reads the text via {@link #messageOf}.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> commitSubcommand(Runtime runtime) {
+        return Commands.literal(Subcommand.COMMIT.literal())
+                .requires(Commands.hasPermission(permissionCheck(Subcommand.COMMIT.permissionLevel())))
+                .executes(runtime::commit)
+                .then(Commands.literal("-m")
+                        .then(Commands.argument(MESSAGE_ARG,
+                                com.mojang.brigadier.arguments.StringArgumentType.greedyString())
+                                .executes(runtime::commit)));
     }
 
     /** A gated subcommand literal: {@code requires(hasPermission(level))} + the execution action. */

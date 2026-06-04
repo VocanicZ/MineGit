@@ -11,12 +11,13 @@ import org.junit.jupiter.api.Test;
 class SubcommandTest {
 
     @Test
-    void literalsAreTheReadSetupTrioInOrder() {
-        assertEquals(Arrays.asList("init", "status", "log"), Subcommand.literals());
+    void literalsAreTheReadSetupCommitSetInOrder() {
+        assertEquals(Arrays.asList("init", "status", "commit", "log"), Subcommand.literals());
     }
 
     @Test
-    void readSetupTrioIsAvailableToEveryPlayer() {
+    void readSetupAndCommitAreAvailableToEveryPlayer() {
+        // Spec D §4: read and commit are ungated (level 0); only checkout will gate at op.
         for (Subcommand sub : Subcommand.values()) {
             assertEquals(0, sub.permissionLevel(), sub + " should be ungated in this slice");
         }
@@ -32,6 +33,7 @@ class SubcommandTest {
         assertSame(Subcommand.STATUS, Subcommand.byLiteral("status"));
         assertSame(Subcommand.STATUS, Subcommand.byLiteral("STATUS"));
         assertSame(Subcommand.INIT, Subcommand.byLiteral("init"));
+        assertSame(Subcommand.COMMIT, Subcommand.byLiteral("commit"));
         assertNull(Subcommand.byLiteral("checkout"));
         assertNull(Subcommand.byLiteral(null));
     }
