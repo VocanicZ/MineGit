@@ -4,6 +4,7 @@ import com.minegit.core.adapter.WorldAdapter;
 import com.minegit.core.diff.WorldDiffer;
 import com.minegit.core.git.CommitInfo;
 import com.minegit.core.git.MineGitRepo;
+import com.minegit.core.git.UnknownRefException;
 import com.minegit.core.model.WorldDiff;
 import com.minegit.plugin.world.WorldRepoRegistry;
 import java.nio.file.Path;
@@ -28,9 +29,9 @@ import org.bukkit.entity.Player;
  *
  * <p>Routes the first argument to a subcommand, enforcing per-subcommand permissions
  * ({@link #PERM_USE} for read/commit, {@link #PERM_ADMIN} for destructive ops). This slice
- * implements the read-only/setup trio — {@code init}, {@code status}, {@code log} — plus tab
- * completion of subcommand names; {@code commit}/{@code diff}/{@code checkout} land in follow-up
- * issues by adding a case here and an entry to {@link #PERMISSIONS}.
+ * implements the read-only/setup commands — {@code init}, {@code status}, {@code log},
+ * {@code diff} — plus tab completion of subcommand names; {@code commit}/{@code checkout} land in
+ * follow-up issues by adding a case here and an entry to {@link #PERMISSIONS}.
  *
  * <p>Kept Bukkit-light and dependency-injected (registry, adapter factory, clock, messaging) so it
  * is unit-testable without booting a server: the live plugin wires the real collaborators at enable.
@@ -53,6 +54,7 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         p.put("init", PERM_USE);
         p.put("status", PERM_USE);
         p.put("log", PERM_USE);
+        p.put("diff", PERM_USE);
         PERMISSIONS = p;
     }
 
@@ -96,6 +98,8 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
                 return doStatus(sender);
             case "log":
                 return doLog(sender);
+            case "diff":
+                return doDiff(sender, args);
             default:
                 usage(sender);
                 return true;
@@ -189,6 +193,43 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
                 messages.send(sender,
                         ChatColor.DARK_GRAY + "…and " + (commits.size() - shown) + " more.");
             }
+        }
+        return true;
+    }
+
+    private boolean doDiff(CommandSender sender, String[] args) {
+        Player player = requirePlayer(sender);
+        if (player == null) {
+            return true;
+        }
+        World world = player.getWorld();
+        String name = world.getName();
+        if (!repos.isBound(name)) {
+            messages.send(sender, noRepo(name));
+            return true;
+        }
+        // args[0] is "diff"; the optional ref pair follows. Zero refs → working-vs-HEAD; two refs →
+        // ref-vs-ref; anything else is a usage error (mirrors the CLI `diff [refA refB]`).
+        if (args.length != 1 && args.length != 3) {
+            messages.send(sender,
+                    ChatColor.GOLD + "MineGit " + ChatColor.GRAY + "— usage: "
+                            + ChatColor.WHITE + "/mg diff [refA refB]");
+            return true;
+        }
+        WorldAdapter adapter = adapters.apply(world);
+        try (MineGitRepo repo = MineGitRepo.open(repos.repoPath(name), adapter, clock)) {
+            WorldDiff diff = args.length == 1
+                    ? WorldDiffer.diffWorkingTree(repo, adapter)
+                    : WorldDiffer.diffRefs(repo, args[1], args[2]);
+            String scope = args.length == 1 ? name : args[1] + ".." + args[2];
+            messages.send(sender, ChatColor.GOLD + "Diff " + ChatColor.GRAY + scope + ":");
+            for (String line : MineGitFormat.diffBody(diff, MineGitFormat.DIFF_LINE_CAP)) {
+                messages.send(sender, line);
+            }
+        } catch (UnknownRefException e) {
+            // Surface unresolvable refs loudly and consistently with core #37, never silently diff
+            // against an empty tree.
+            messages.send(sender, ChatColor.RED + e.getMessage());
         }
         return true;
     }
