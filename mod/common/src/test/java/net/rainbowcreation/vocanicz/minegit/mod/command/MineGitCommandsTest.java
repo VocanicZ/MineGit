@@ -61,6 +61,11 @@ class MineGitCommandsTest {
         public int checkout(CommandContext<CommandSourceStack> ctx) {
             return 1;
         }
+
+        @Override
+        public int rescan(CommandContext<CommandSourceStack> ctx) {
+            return 1;
+        }
     };
 
     private CommandDispatcher<CommandSourceStack> registered() {
@@ -78,9 +83,9 @@ class MineGitCommandsTest {
             children.add(child.getName());
         }
         assertTrue(children.containsAll(
-                        java.util.Arrays.asList("init", "status", "commit", "log", "diff", "checkout")),
+                        java.util.Arrays.asList("init", "status", "commit", "log", "diff", "checkout", "rescan")),
                 "subcommands missing: " + children);
-        assertEquals(6, children.size());
+        assertEquals(7, children.size());
     }
 
     @Test

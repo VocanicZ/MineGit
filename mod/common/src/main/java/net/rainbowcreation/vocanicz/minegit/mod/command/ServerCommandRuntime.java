@@ -1,5 +1,6 @@
 package net.rainbowcreation.vocanicz.minegit.mod.command;
 
+import net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet;
 import net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.core.git.Author;
 import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
@@ -8,6 +9,7 @@ import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
 import net.rainbowcreation.vocanicz.minegit.mod.world.BackgroundExecutor;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CommitService;
+import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTrackerRegistry;
 import net.rainbowcreation.vocanicz.minegit.mod.world.LevelRepoRegistry;
 import net.rainbowcreation.vocanicz.minegit.mod.world.MinecraftServerThread;
 import net.rainbowcreation.vocanicz.minegit.mod.world.ModWorldAdapter;
@@ -46,6 +48,7 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
 
     private final Clock clock;
     private final Executor background;
+    private final DirtyTrackerRegistry trackers = new DirtyTrackerRegistry();
 
     public ServerCommandRuntime() {
         this(Clock.systemUTC());
@@ -59,6 +62,11 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
     public ServerCommandRuntime(Clock clock, Executor background) {
         this.clock = clock;
         this.background = background;
+    }
+
+    /** Exposes the server-lifetime dirty tracker registry (for wiring mixin events). */
+    public DirtyTrackerRegistry trackers() {
+        return trackers;
     }
 
     @Override
@@ -97,7 +105,8 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         if (!registry.isBound(levelKey)) {
             return noRepo(ctx, levelKey);
         }
-        WorldDiff diff = MineGitService.status(registry.repoPath(levelKey), adapterFor(level), clock);
+        DirtyChunkSet tracker = trackers.tracker(levelKey);
+        WorldDiff diff = MineGitService.status(registry.repoPath(levelKey), adapterFor(level), clock, tracker);
         ctx.getSource().sendSuccess(
                 () -> Component.literal("Status ").withStyle(ChatFormatting.GOLD)
                         .append(Component.literal(levelKey + ": ").withStyle(ChatFormatting.GRAY))
@@ -119,7 +128,12 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
             return noRepo(ctx, levelKey);
         }
         String message = MineGitCommands.messageOf(ctx);
+        boolean full = MineGitCommands.isFull(ctx);
         Author author = authorFor(player);
+        DirtyChunkSet tracker = trackers.tracker(levelKey);
+        if (full) {
+            tracker.unprime(); // force a full rescan on this commit
+        }
         WorldAdapter live = adapterFor(level);
         Path repoPath = registry.repoPath(levelKey);
         Executor serverThread = new ServerThreadScheduler(
@@ -130,7 +144,7 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
                 () -> MineGitText.notice("Committing '" + levelKey + "'…"), false);
         // Reads hop to the server thread (throttled), git runs off-thread, completion lands back on
         // the server thread where messaging the player is safe.
-        service.commit(repoPath, live, clock, message, author,
+        service.commit(repoPath, live, clock, message, author, tracker,
                 result -> reportCommit(ctx.getSource(), levelKey, result));
         return 1;
     }
@@ -221,7 +235,7 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         String scope;
         try {
             if (refA == null) {
-                diff = MineGitService.status(repoPath, adapter, clock); // working-vs-HEAD
+                diff = MineGitService.status(repoPath, adapter, clock, trackers.tracker(levelKey)); // working-vs-HEAD
                 scope = levelKey;
             } else {
                 diff = MineGitService.diffRefs(repoPath, adapter, clock, refA, refB);
@@ -290,6 +304,21 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
                 .append(MineGitText.summary(applied)), false);
     }
 
+    @Override
+    public int rescan(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            return notInGame(ctx);
+        }
+        ServerLevel level = player.level();
+        String levelKey = levelKey(level);
+        trackers.tracker(levelKey).unprime();
+        ctx.getSource().sendSuccess(
+                () -> MineGitText.good("MineGit will do a full rescan on the next commit/status."),
+                false);
+        return 1;
+    }
+
     // ---- helpers ------------------------------------------------------------------------------
 
     /** The string argument {@code name} if Brigadier matched it, or {@code null} when absent. */
@@ -302,7 +331,7 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
     }
 
     private WorldAdapter adapterFor(ServerLevel level) {
-        return new ModWorldAdapter(new ServerLevelAccess(level));
+        return new ModWorldAdapter(new ServerLevelAccess(level), trackers.tracker(levelKey(level)));
     }
 
     private static LevelRepoRegistry registryFor(MinecraftServer server) {

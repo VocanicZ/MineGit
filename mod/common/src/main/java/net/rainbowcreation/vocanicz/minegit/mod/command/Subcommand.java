@@ -22,7 +22,8 @@ public enum Subcommand {
     COMMIT("commit", 0),
     LOG("log", 0),
     DIFF("diff", 0),
-    CHECKOUT("checkout", 2); // == OP_PERMISSION_LEVEL; inlined — enum consts can't forward-ref a field
+    CHECKOUT("checkout", 2), // == OP_PERMISSION_LEVEL; inlined — enum consts can't forward-ref a field
+    RESCAN("rescan", 2);     // op-only: forces a full-world rescan on the next commit/status
 
     /**
      * Vanilla op permission level. The world-mutating {@code checkout} subcommand gates here; the

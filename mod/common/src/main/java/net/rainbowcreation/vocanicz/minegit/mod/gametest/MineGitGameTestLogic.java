@@ -138,7 +138,7 @@ public final class MineGitGameTestLogic {
     private static CommitInfo commit(WorldAdapter adapter, Path repo, String message) {
         AtomicReference<CommitService.Result> out = new AtomicReference<CommitService.Result>();
         new CommitService(INLINE, INLINE, CHUNKS_PER_TICK)
-                .commit(repo, adapter, CLOCK, message, AUTHOR, out::set);
+                .commit(repo, adapter, CLOCK, message, AUTHOR, null, out::set);
         CommitService.Result result = out.get();
         if (result == null) {
             throw new IllegalStateException("commit '" + message + "' never completed");

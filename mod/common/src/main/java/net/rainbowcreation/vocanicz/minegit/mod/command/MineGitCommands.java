@@ -51,6 +51,9 @@ public final class MineGitCommands {
 
         int checkout(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx)
                 throws CommandSyntaxException;
+
+        int rescan(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx)
+                throws CommandSyntaxException;
     }
 
     /** Brigadier argument name carrying the {@code /mg commit -m <message>} text. */
@@ -61,6 +64,9 @@ public final class MineGitCommands {
 
     /** The {@code /mg checkout <ref> --force} flag literal that overrides the dirty-guard. */
     static final String FORCE_FLAG = "--force";
+
+    /** The {@code /mg commit --full} flag literal that forces a full rescan (overrides incremental). */
+    static final String FULL_FLAG = "--full";
 
     /** Message used when {@code /mg commit} is run with no {@code -m} text. */
     public static final String DEFAULT_COMMIT_MESSAGE = "Update world";
@@ -97,6 +103,20 @@ public final class MineGitCommands {
         return false;
     }
 
+    /**
+     * Whether {@code /mg commit --full} was typed: true iff the {@link #FULL_FLAG} literal node was
+     * matched on the parsed path. Forces a full-world rescan on this commit, ignoring incremental
+     * dirty tracking (useful after structural changes or after re-binding the world adapter).
+     */
+    public static boolean isFull(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx) {
+        for (com.mojang.brigadier.context.ParsedCommandNode<CommandSourceStack> node : ctx.getNodes()) {
+            if (FULL_FLAG.equals(node.getNode().getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Registers {@code /minegit} (+ aliases) on {@code dispatcher}, delegating to {@code runtime}. */
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher, Runtime runtime) {
         String primary = MineGitInfo.commandAliases().get(0);
@@ -117,7 +137,8 @@ public final class MineGitCommands {
                 .then(commitSubcommand(runtime))
                 .then(subcommand(Subcommand.LOG, runtime::log))
                 .then(diffSubcommand(runtime))
-                .then(checkoutSubcommand(runtime));
+                .then(checkoutSubcommand(runtime))
+                .then(subcommand(Subcommand.RESCAN, runtime::rescan));
     }
 
     /**
@@ -162,6 +183,17 @@ public final class MineGitCommands {
      * captures the rest of the line (Spec D §4). Both forms dispatch to {@code runtime.commit}; the
      * runtime reads the text via {@link #messageOf}.
      */
+    /**
+     * The {@code commit} literal: runnable bare (default message), as {@code commit -m <message>}
+     * (greedy message), as {@code commit --full} (force full rescan), or as {@code commit --full -m
+     * <message>} (full rescan + explicit message). Both the bare and {@code --full} forms dispatch to
+     * {@code runtime.commit}; the runtime reads the message via {@link #messageOf} and the flag via
+     * {@link #isFull}.
+     *
+     * <p>Combining {@code -m} and {@code --full} in the same command is supported as {@code commit
+     * --full -m <message>}. The reverse order ({@code commit -m <msg> --full}) is not supported by
+     * Brigadier's greedy-string argument (it would consume {@code --full} as part of the message).
+     */
     private static LiteralArgumentBuilder<CommandSourceStack> commitSubcommand(Runtime runtime) {
         return Commands.literal(Subcommand.COMMIT.literal())
                 .requires(Commands.hasPermission(permissionCheck(Subcommand.COMMIT.permissionLevel())))
@@ -169,7 +201,13 @@ public final class MineGitCommands {
                 .then(Commands.literal("-m")
                         .then(Commands.argument(MESSAGE_ARG,
                                 com.mojang.brigadier.arguments.StringArgumentType.greedyString())
-                                .executes(runtime::commit)));
+                                .executes(runtime::commit)))
+                .then(Commands.literal(FULL_FLAG)
+                        .executes(runtime::commit)
+                        .then(Commands.literal("-m")
+                                .then(Commands.argument(MESSAGE_ARG,
+                                        com.mojang.brigadier.arguments.StringArgumentType.greedyString())
+                                        .executes(runtime::commit))));
     }
 
     /** A gated subcommand literal: {@code requires(hasPermission(level))} + the execution action. */

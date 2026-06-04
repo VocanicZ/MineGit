@@ -11,18 +11,18 @@ import org.junit.jupiter.api.Test;
 class SubcommandTest {
 
     @Test
-    void literalsAreTheReadSetupCommitDiffCheckoutSetInOrder() {
-        assertEquals(Arrays.asList("init", "status", "commit", "log", "diff", "checkout"),
+    void literalsAreTheReadSetupCommitDiffCheckoutRescanSetInOrder() {
+        assertEquals(Arrays.asList("init", "status", "commit", "log", "diff", "checkout", "rescan"),
                 Subcommand.literals());
     }
 
     @Test
-    void readSetupAndCommitAreAvailableToEveryPlayerButCheckoutGatesAtOp() {
-        // Spec D §4: read and commit are ungated (level 0); only the world-mutating checkout gates at op.
+    void readSetupAndCommitAreAvailableToEveryPlayerButCheckoutAndRescanGateAtOp() {
+        // Spec D §4: read and commit are ungated (level 0); the world-mutating checkout and rescan gate at op.
         for (Subcommand sub : Subcommand.values()) {
-            if (sub == Subcommand.CHECKOUT) {
+            if (sub == Subcommand.CHECKOUT || sub == Subcommand.RESCAN) {
                 assertEquals(Subcommand.OP_PERMISSION_LEVEL, sub.permissionLevel(),
-                        "checkout mutates the world — gate at op level " + Subcommand.OP_PERMISSION_LEVEL);
+                        sub + " mutates world/tracking state — gate at op level " + Subcommand.OP_PERMISSION_LEVEL);
             } else {
                 assertEquals(0, sub.permissionLevel(), sub + " should be ungated");
             }

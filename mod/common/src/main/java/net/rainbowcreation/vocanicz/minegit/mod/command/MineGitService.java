@@ -1,5 +1,6 @@
 package net.rainbowcreation.vocanicz.minegit.mod.command;
 
+import net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet;
 import net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.core.diff.WorldDiffer;
 import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
@@ -39,6 +40,29 @@ public final class MineGitService {
         Objects.requireNonNull(clock, "clock");
         try (MineGitRepo repo = MineGitRepo.open(repoDir, adapter, clock)) {
             return WorldDiffer.diffWorkingTree(repo, adapter);
+        }
+    }
+
+    /**
+     * Primed-aware working-tree-vs-HEAD diff. When {@code tracker} is primed, only the dirty chunks
+     * ({@link net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter#peekDirty()}) are
+     * compared, giving a fast incremental result. On the first call (tracker not yet primed) a full
+     * diff is done and the tracker is primed so the next call is incremental.
+     *
+     * @param tracker the per-level dirty set, or {@code null} to always do a full diff (falls back to
+     *                the 3-arg {@link #status(Path, WorldAdapter, Clock)})
+     */
+    public static WorldDiff status(Path repoDir, WorldAdapter adapter, Clock clock, DirtyChunkSet tracker) {
+        Objects.requireNonNull(repoDir, "repoDir");
+        Objects.requireNonNull(adapter, "adapter");
+        Objects.requireNonNull(clock, "clock");
+        try (MineGitRepo repo = MineGitRepo.open(repoDir, adapter, clock)) {
+            if (tracker != null && tracker.isPrimed()) {
+                return WorldDiffer.diffWorkingTreeDirty(repo, adapter);
+            }
+            WorldDiff full = WorldDiffer.diffWorkingTree(repo, adapter);
+            if (tracker != null) tracker.prime();
+            return full;
         }
     }
 

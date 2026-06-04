@@ -66,7 +66,7 @@ class CommitServiceTest {
 
         AtomicReference<CommitService.Result> result = new AtomicReference<CommitService.Result>();
         service.commit(repoDir, world, clock, "build a tower",
-                new Author("Steve", "steve@players.minegit.local"), result::set);
+                new Author("Steve", "steve@players.minegit.local"), null, result::set);
 
         CommitService.Result r = result.get();
         assertNotNull(r, "completion callback fired");
@@ -102,7 +102,7 @@ class CommitServiceTest {
 
         AtomicReference<CommitService.Result> result = new AtomicReference<CommitService.Result>();
         service.commit(repoDir, world, clock, "spread",
-                new Author("Steve", "steve@players.minegit.local"), result::set);
+                new Author("Steve", "steve@players.minegit.local"), null, result::set);
 
         assertNotNull(result.get().commit());
         // 3 chunks at 1/tick => at least 3 server-thread read passes (plus the completion hop).
@@ -123,7 +123,7 @@ class CommitServiceTest {
                 new CommitService(new RecordingExecutor(), new RecordingExecutor(), 16);
         AtomicReference<CommitService.Result> result = new AtomicReference<CommitService.Result>();
         service.commit(repoDir, world, clock, "nothing changed",
-                new Author("Steve", "steve@players.minegit.local"), result::set);
+                new Author("Steve", "steve@players.minegit.local"), null, result::set);
 
         CommitService.Result r = result.get();
         assertFalse(r.isError());
@@ -147,7 +147,7 @@ class CommitServiceTest {
         };
         CommitService service = new CommitService(serverThread, background, 16);
         service.commit(repoDir, world, clock, "ordered",
-                new Author("Steve", "steve@players.minegit.local"), r -> { });
+                new Author("Steve", "steve@players.minegit.local"), null, r -> { });
 
         assertEquals("server", order.get(0), "the first hop reads on the server thread");
         assertTrue(order.contains("background"), "git ran on the background executor");

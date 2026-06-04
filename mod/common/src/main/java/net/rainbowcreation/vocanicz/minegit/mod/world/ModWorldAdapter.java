@@ -1,6 +1,7 @@
 package net.rainbowcreation.vocanicz.minegit.mod.world;
 
 import net.rainbowcreation.vocanicz.minegit.core.adapter.ChunkRef;
+import net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet;
 import net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.core.model.BlockChange;
 import net.rainbowcreation.vocanicz.minegit.core.model.BlockEntity;
@@ -35,10 +36,18 @@ public final class ModWorldAdapter implements WorldAdapter {
 
     private final LevelAccess level;
     private final DimensionId dimension;
+    private final DirtyChunkSet dirty;
 
+    /** Creates an adapter with no dirty tracking; {@link #drainDirty()} and {@link #peekDirty()} fall back to all loaded chunks. */
     public ModWorldAdapter(LevelAccess level) {
+        this(level, null);
+    }
+
+    /** Creates an adapter backed by the given dirty set; never {@code null}-tolerant for the dirty set parameter — pass the 1-arg ctor for no tracking. */
+    public ModWorldAdapter(LevelAccess level, DirtyChunkSet dirty) {
         this.level = Objects.requireNonNull(level, "level");
         this.dimension = level.dimension();
+        this.dirty = dirty; // nullable — null means "no event-based tracking"
     }
 
     /** The dimension this adapter's bound level maps to. */
@@ -62,15 +71,12 @@ public final class ModWorldAdapter implements WorldAdapter {
 
     @Override
     public Set<ChunkRef> drainDirty() {
-        // First slice: no event-based dirty set. The loaded chunks are the candidate set; the engine
-        // dedupes unchanged ones by content. Event tracking is the immediate follow-up (Spec D §3).
-        return allChunks();
+        return dirty != null ? dirty.drainDirty() : allChunks();
     }
 
     @Override
     public Set<ChunkRef> peekDirty() {
-        // Placeholder until event-based dirty tracking is wired (Spec E task 3).
-        return allChunks();
+        return dirty != null ? dirty.peekDirty() : allChunks();
     }
 
     @Override
