@@ -6,8 +6,10 @@ import com.minegit.core.git.Author;
 import com.minegit.core.git.CommitInfo;
 import com.minegit.core.git.MineGitRepo;
 import com.minegit.core.git.UnknownRefException;
+import com.minegit.core.git.WorkingTreeDirtyException;
 import com.minegit.core.model.WorldDiff;
 import com.minegit.plugin.world.Actor;
+import com.minegit.plugin.world.CheckoutService;
 import com.minegit.plugin.world.CommitService;
 import com.minegit.plugin.world.WorldRepoRegistry;
 import java.nio.file.Path;
@@ -32,10 +34,10 @@ import org.bukkit.entity.Player;
  *
  * <p>Routes the first argument to a subcommand, enforcing per-subcommand permissions
  * ({@link #PERM_USE} for read/commit, {@link #PERM_ADMIN} for destructive ops). This slice
- * implements {@code init}, {@code status}, {@code log}, {@code diff} (#45/#47) and {@code commit}
- * (#46) — the latter hopping threads via {@link CommitService} (main-thread reads, async git) — plus
- * tab completion of subcommand names; {@code checkout} lands in a follow-up issue by adding a case
- * here and an entry to {@link #PERMISSIONS}.
+ * implements {@code init}, {@code status}, {@code log}, {@code diff} (#45/#47), {@code commit}
+ * (#46) — hopping threads via {@link CommitService} (main-thread reads, async git) — and
+ * {@code checkout} (#48) — hopping via {@link CheckoutService} (async dirty-guard/diff, throttled
+ * main-thread apply) — plus tab completion of subcommand names and checkout refs.
  *
  * <p>Kept Bukkit-light and dependency-injected (registry, adapter factory, clock, messaging) so it
  * is unit-testable without booting a server: the live plugin wires the real collaborators at enable.
@@ -60,6 +62,7 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         p.put("commit", PERM_USE);
         p.put("log", PERM_USE);
         p.put("diff", PERM_USE);
+        p.put("checkout", PERM_ADMIN);
         PERMISSIONS = p;
     }
 
@@ -68,18 +71,21 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
     private final Clock clock;
     private final MessageService messages;
     private final CommitService commitService;
+    private final CheckoutService checkoutService;
 
     public MineGitCommand(
             WorldRepoRegistry repos,
             Function<World, WorldAdapter> adapters,
             Clock clock,
             MessageService messages,
-            CommitService commitService) {
+            CommitService commitService,
+            CheckoutService checkoutService) {
         this.repos = Objects.requireNonNull(repos, "repos");
         this.adapters = Objects.requireNonNull(adapters, "adapters");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.messages = Objects.requireNonNull(messages, "messages");
         this.commitService = Objects.requireNonNull(commitService, "commitService");
+        this.checkoutService = Objects.requireNonNull(checkoutService, "checkoutService");
     }
 
     @Override
@@ -110,6 +116,8 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
                 return doLog(sender);
             case "diff":
                 return doDiff(sender, args);
+            case "checkout":
+                return doCheckout(sender, args);
             default:
                 usage(sender);
                 return true;
@@ -129,7 +137,32 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
             }
             return out;
         }
+        if (args.length == 2 && args[0].equalsIgnoreCase("checkout")
+                && sender.hasPermission(PERM_ADMIN) && sender instanceof Player) {
+            return completeRefs((Player) sender, args[1]);
+        }
         return java.util.Collections.emptyList();
+    }
+
+    /** Branch names (and {@code HEAD}) of the player's world repo that match {@code prefix}. */
+    private List<String> completeRefs(Player player, String prefix) {
+        String name = player.getWorld().getName();
+        if (!repos.isBound(name)) {
+            return java.util.Collections.emptyList();
+        }
+        String lower = prefix.toLowerCase(Locale.ROOT);
+        List<String> refs = new ArrayList<String>();
+        if ("HEAD".toLowerCase(Locale.ROOT).startsWith(lower)) {
+            refs.add("HEAD");
+        }
+        try (MineGitRepo repo = MineGitRepo.open(repos.repoPath(name), adapters.apply(player.getWorld()), clock)) {
+            for (com.minegit.core.git.BranchRef branch : repo.branches()) {
+                if (branch.getName().toLowerCase(Locale.ROOT).startsWith(lower)) {
+                    refs.add(branch.getName());
+                }
+            }
+        }
+        return refs;
     }
 
     // ---- subcommands --------------------------------------------------------------------------
@@ -290,6 +323,69 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
             messages.send(sender, ChatColor.RED + e.getMessage());
         }
         return true;
+    }
+
+    private boolean doCheckout(CommandSender sender, String[] args) {
+        Player player = requirePlayer(sender);
+        if (player == null) {
+            return true;
+        }
+        // args[0] is "checkout"; the target ref is required, an optional --force/-f may follow it.
+        String target = null;
+        boolean force = false;
+        for (int i = 1; i < args.length; i++) {
+            if (args[i].equals("--force") || args[i].equals("-f")) {
+                force = true;
+            } else if (target == null) {
+                target = args[i];
+            }
+        }
+        if (target == null) {
+            messages.send(sender,
+                    ChatColor.RED + "Usage: " + ChatColor.WHITE + "/mg checkout <ref> [--force]");
+            return true;
+        }
+        World world = player.getWorld();
+        String name = world.getName();
+        if (!repos.isBound(name)) {
+            messages.send(sender, noRepo(name));
+            return true;
+        }
+        WorldAdapter live = adapters.apply(world);
+        Path path = repos.repoPath(name);
+        String ref = target;
+        messages.send(sender, ChatColor.GRAY + "Checking out '" + ref + "' in '" + name + "'…");
+        // Snapshot + dirty-guard + diff hop threads; the apply replays on the main thread (throttled).
+        checkoutService.checkout(path, live, clock, ref, force,
+                result -> reportCheckout(sender, name, ref, result));
+        return true;
+    }
+
+    /** Renders the async checkout outcome to the player (Spec B §6: "message on completion"). */
+    private void reportCheckout(
+            CommandSender sender, String world, String ref, CheckoutService.Result result) {
+        if (result.isError()) {
+            RuntimeException error = result.error();
+            if (error instanceof WorkingTreeDirtyException) {
+                messages.send(sender,
+                        ChatColor.YELLOW + "'" + world + "' differs from HEAD. "
+                                + ChatColor.WHITE + "Commit first, or rerun with "
+                                + ChatColor.AQUA + "--force" + ChatColor.WHITE + " to discard.");
+                return;
+            }
+            if (error instanceof UnknownRefException) {
+                messages.send(sender, ChatColor.RED + error.getMessage());
+                return;
+            }
+            messages.send(sender,
+                    ChatColor.RED + "Checkout failed for '" + world + "': " + error.getMessage());
+            return;
+        }
+        WorldDiff applied = result.applied();
+        messages.send(sender,
+                ChatColor.GREEN + "Checked out " + ChatColor.YELLOW + ref
+                        + ChatColor.GREEN + " in " + ChatColor.GRAY + world
+                        + ChatColor.WHITE + " " + MineGitFormat.summary(applied));
     }
 
     // ---- helpers ------------------------------------------------------------------------------

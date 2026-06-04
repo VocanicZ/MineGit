@@ -3,6 +3,7 @@ package com.minegit.plugin.command;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -16,6 +17,7 @@ import com.minegit.core.model.BlockState;
 import com.minegit.core.model.ChunkPos;
 import com.minegit.core.model.DimensionId;
 import com.minegit.core.model.NormalizedChunk;
+import com.minegit.plugin.world.CheckoutService;
 import com.minegit.plugin.world.CommitService;
 import com.minegit.plugin.world.WorldRepoRegistry;
 import java.nio.file.Files;
@@ -110,7 +112,8 @@ class MineGitCommandTest {
         WorldRepoRegistry repos = new WorldRepoRegistry(dataFolder);
         Clock clock = Clock.fixed(Instant.ofEpochSecond(1780576496L), ZoneOffset.UTC);
         CommitService commits = new CommitService(INLINE, INLINE, 16);
-        return new MineGitCommand(repos, adapters, clock, messages, commits);
+        CheckoutService checkouts = new CheckoutService(INLINE, INLINE, 16);
+        return new MineGitCommand(repos, adapters, clock, messages, commits, checkouts);
     }
 
     private Player player(String worldName) {
@@ -393,6 +396,124 @@ class MineGitCommandTest {
 
         assertTrue(completions.contains("status"), "'s' completes to status");
         assertFalse(completions.contains("init"), "'s' excludes non-matching subcommands");
+    }
+
+    /** A player with {@code minegit.use} but NOT {@code minegit.admin}. */
+    private Player nonAdminPlayer(String worldName) {
+        World world = mock(World.class);
+        lenient().when(world.getName()).thenReturn(worldName);
+        Player p = mock(Player.class);
+        lenient().when(p.getWorld()).thenReturn(world);
+        lenient().when(p.getName()).thenReturn("Alex");
+        lenient().when(p.getUniqueId()).thenReturn(
+                java.util.UUID.fromString("00000000-0000-0000-0000-0000000000bb"));
+        lenient().when(p.hasPermission(MineGitCommand.PERM_USE)).thenReturn(true);
+        lenient().when(p.hasPermission(MineGitCommand.PERM_ADMIN)).thenReturn(false);
+        return p;
+    }
+
+    @Test
+    void checkoutWithoutRepoTellsPlayerToInit() {
+        Player p = player("world");
+
+        dispatch(p, "checkout", "HEAD");
+
+        assertTrue(messages.anyContains("init"), "checkout nudges toward /mg init");
+    }
+
+    @Test
+    void checkoutDeniedWithoutAdminPermission() {
+        Player p = nonAdminPlayer("world");
+
+        dispatch(p, "checkout", "HEAD");
+
+        assertTrue(messages.last().toLowerCase(java.util.Locale.ROOT).contains("permission"),
+                "checkout requires minegit.admin");
+    }
+
+    @Test
+    void checkoutWithoutARefShowsUsage() {
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        dispatch(p, "checkout");
+
+        assertTrue(messages.last().toLowerCase(java.util.Locale.ROOT).contains("usage"),
+                "checkout needs a ref");
+    }
+
+    @Test
+    void checkoutRevertsABuiltChangeAndTellsThePlayer() {
+        FakeWorldAdapter live = new FakeWorldAdapter();
+        live.setBlock(DimensionId.OVERWORLD, 0, 64, 0, new BlockState("minecraft:stone"));
+        adapters = w -> live;
+
+        Player p = player("world");
+        dispatch(p, "init");
+        dispatch(p, "commit", "-m", "A");
+        live.setBlock(DimensionId.OVERWORLD, 100, 64, 0, new BlockState("minecraft:dirt"));
+        dispatch(p, "commit", "-m", "B");
+        messages.lines.clear();
+
+        dispatch(p, "checkout", "HEAD~1");
+
+        assertSame(BlockState.AIR, live.getBlock(DimensionId.OVERWORLD, 100, 64, 0),
+                "the dirt from B was reverted live");
+        assertTrue(messages.anyContains("Checked out"), "player told the checkout landed");
+    }
+
+    @Test
+    void checkoutDirtyTreeIsRefusedWithoutForceAndProceedsWithIt() {
+        FakeWorldAdapter live = new FakeWorldAdapter();
+        live.setBlock(DimensionId.OVERWORLD, 0, 64, 0, new BlockState("minecraft:stone"));
+        adapters = w -> live;
+
+        Player p = player("world");
+        dispatch(p, "init");
+        dispatch(p, "commit", "-m", "A");
+        live.setBlock(DimensionId.OVERWORLD, 100, 64, 0, new BlockState("minecraft:dirt"));
+        dispatch(p, "commit", "-m", "B");
+        // Uncommitted live edit makes the world dirty.
+        live.setBlock(DimensionId.OVERWORLD, 200, 64, 0, new BlockState("minecraft:glass"));
+        messages.lines.clear();
+
+        dispatch(p, "checkout", "HEAD~1");
+        assertTrue(messages.anyContains("--force"), "dirty tree refused with a --force hint");
+        assertEquals(new BlockState("minecraft:dirt"),
+                live.getBlock(DimensionId.OVERWORLD, 100, 64, 0), "refused checkout reverted nothing");
+
+        messages.lines.clear();
+        dispatch(p, "checkout", "HEAD~1", "--force");
+        assertSame(BlockState.AIR, live.getBlock(DimensionId.OVERWORLD, 100, 64, 0),
+                "forced checkout reverted B");
+        assertTrue(messages.anyContains("Checked out"));
+    }
+
+    @Test
+    void checkoutUnknownRefIsReportedLoudly() {
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        dispatch(p, "checkout", "nonexistent");
+
+        assertTrue(messages.anyContains("unknown ref"), "unknown ref surfaced loudly");
+        assertTrue(messages.anyContains("nonexistent"), "names the offending ref");
+    }
+
+    @Test
+    void checkoutAppearsInTabCompletion() {
+        Player p = player("world");
+        List<String> completions = command().onTabComplete(p, null, "mg", new String[] {"che"});
+        assertTrue(completions.contains("checkout"), "'che' completes to checkout");
+    }
+
+    @Test
+    void checkoutHiddenFromTabCompletionWithoutAdmin() {
+        Player p = nonAdminPlayer("world");
+        List<String> completions = command().onTabComplete(p, null, "mg", new String[] {"che"});
+        assertFalse(completions.contains("checkout"), "no minegit.admin -> no checkout offered");
     }
 
     @Test

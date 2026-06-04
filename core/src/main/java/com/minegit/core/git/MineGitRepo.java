@@ -411,6 +411,29 @@ public final class MineGitRepo implements Closeable {
      * Minecraft dependencies.
      */
     public WorldDiff checkout(String target, boolean force) {
+        WorldDiff applied = planCheckout(target, force);
+        for (java.util.Map.Entry<DimensionId, List<ChunkDiff>> e
+                : applied.getDimensions().entrySet()) {
+            for (ChunkDiff chunkDiff : e.getValue()) {
+                adapter.apply(e.getKey(), chunkDiff.getPos(), chunkDiff.getChanges());
+            }
+        }
+        finishCheckout(target);
+        return applied;
+    }
+
+    /**
+     * The read-only first half of a {@link #checkout(String, boolean)}: runs the dirty-guard (unless
+     * {@code force}) and computes the {@code HEAD → target} delta as a {@link WorldDiff}, mutating
+     * <strong>neither</strong> the live world nor the git ref. A frontend that must apply the delta on
+     * a specific thread (the Spigot plugin replays it on the main thread, throttled to N chunks/tick —
+     * Spec B §6) plans here, applies each {@link ChunkDiff} itself via {@link WorldAdapter#apply}, then
+     * calls {@link #finishCheckout(String)} to move the ref.
+     *
+     * @throws WorkingTreeDirtyException if {@code !force} and the live world differs from {@code HEAD}
+     * @throws UnknownRefException if {@code target} resolves to nothing
+     */
+    public WorldDiff planCheckout(String target, boolean force) {
         Objects.requireNonNull(target, "target");
         if (!force) {
             WorldDiff dirty = WorldDiffer.diffWorkingTree(this, adapter);
@@ -420,19 +443,22 @@ public final class MineGitRepo implements Closeable {
                         + "commit or checkout with force");
             }
         }
-        WorldDiff applied = WorldDiffer.diffRefs(this, "HEAD", target);
-        for (java.util.Map.Entry<DimensionId, List<ChunkDiff>> e
-                : applied.getDimensions().entrySet()) {
-            for (ChunkDiff chunkDiff : e.getValue()) {
-                adapter.apply(e.getKey(), chunkDiff.getPos(), chunkDiff.getChanges());
-            }
-        }
+        return WorldDiffer.diffRefs(this, "HEAD", target);
+    }
+
+    /**
+     * The second half of a {@link #checkout(String, boolean)}: moves the local ref and {@code .mgc}
+     * working tree to {@code target} via a hard reset. Pure git — it does not touch the live world, so
+     * a frontend calls this <strong>after</strong> it has replayed the {@link #planCheckout} delta onto
+     * its world.
+     */
+    public void finishCheckout(String target) {
+        Objects.requireNonNull(target, "target");
         try {
             git.reset().setMode(ResetType.HARD).setRef(target).call();
         } catch (GitAPIException ex) {
             throw new IllegalStateException("checkout failed to move ref to " + target, ex);
         }
-        return applied;
     }
 
     /**
