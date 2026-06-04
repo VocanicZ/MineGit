@@ -51,6 +51,8 @@ public final class MineGitNeoForgeGameTest {
                 MineGitGameTestLogic::noOpCheckoutIsClean);
         registerTest(event, env, "incremental_dirty_commit_reverts",
                 MineGitGameTestLogic::incrementalDirtyCommitReverts);
+        registerTest(event, env, "mixin_fires_on_real_block_change",
+                MineGitGameTestLogic::mixinFiresOnRealBlockChange);
     }
 
     private static void registerTest(

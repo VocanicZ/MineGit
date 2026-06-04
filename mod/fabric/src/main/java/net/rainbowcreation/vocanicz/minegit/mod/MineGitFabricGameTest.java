@@ -26,4 +26,9 @@ public final class MineGitFabricGameTest {
     public void incrementalDirtyCommitReverts(GameTestHelper helper) {
         MineGitGameTestLogic.incrementalDirtyCommitReverts(helper);
     }
+
+    @GameTest(maxTicks = 200)
+    public void mixinFiresOnRealBlockChange(GameTestHelper helper) {
+        MineGitGameTestLogic.mixinFiresOnRealBlockChange(helper);
+    }
 }

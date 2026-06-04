@@ -60,6 +60,15 @@ public final class DirtyTracking {
     }
 
     /**
+     * The registry currently {@linkplain #install installed}, or {@code null} if none has been. Lets a
+     * GameTest read back the <em>same</em> {@link DirtyTrackerRegistry} the {@code setBlockState} mixin
+     * writes to, so a real block change can be asserted end to end (mixin → {@link #markDirty}).
+     */
+    public static DirtyTrackerRegistry installedRegistry() {
+        return registry;
+    }
+
+    /**
      * Marks the chunk containing block {@code (blockX, blockZ)} dirty in the {@link DirtyChunkSet}
      * for {@code levelKey}. No-op if no registry has been {@linkplain #install installed} yet.
      *

@@ -10,6 +10,7 @@ import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
 import net.rainbowcreation.vocanicz.minegit.mod.command.MineGitService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CommitService;
+import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTracking;
 import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTrackerRegistry;
 import net.rainbowcreation.vocanicz.minegit.mod.world.ModWorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.mod.world.ServerLevelAccess;
@@ -168,6 +169,50 @@ public final class MineGitGameTestLogic {
         CheckoutService.Result result = checkout(adapter, repo, "HEAD~1", false);
         require(!result.isError(), "checkout HEAD~1 should succeed on a clean world");
         assertAll(helper, Blocks.GOLD_BLOCK);
+
+        helper.succeed();
+    }
+
+    /**
+     * Proves the {@code LevelChunk.setBlockState} mixin actually fires on a real block change and feeds
+     * the published {@link DirtyTracking} registry end to end (Spec E task 4). Unlike
+     * {@link #incrementalDirtyCommitReverts} — which drives the dirty set directly — this performs a
+     * <em>real</em> server-level write via {@code helper.getLevel().setBlock(absPos, state, 3)}, which
+     * funnels through {@code Level.setBlock} → {@code LevelChunk.setBlockState} (verified against the
+     * 1.21.11 bytecode), so the mixin runs in the live call path and must mark the chunk dirty in the
+     * <em>same</em> registry {@code MineGitMod.init} installed.
+     *
+     * <p>It reads back {@link DirtyTracking#installedRegistry()} (the production registry the mixin
+     * writes to), keyed by the {@code ServerLevelAccess.levelKeyOf} scheme — the identical key the
+     * mixin uses — and asserts the changed block's chunk is present with the aligned dimension. If the
+     * mixin never fired, the set would not contain it and this test fails.
+     */
+    public static void mixinFiresOnRealBlockChange(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        DirtyTrackerRegistry installed = DirtyTracking.installedRegistry();
+        require(installed != null,
+                "MineGitMod.init must have installed the dirty registry before GameTests run");
+
+        String levelKey = ServerLevelAccess.levelKeyOf(level);
+        DimensionId dimension = ServerLevelAccess.dimensionOf(level);
+        DirtyChunkSet dirty = installed.tracker(levelKey);
+        // Drain anything boot/setup already accumulated so we observe only our own write.
+        dirty.drainDirty();
+
+        BlockPos rel = SPOTS[0];
+        BlockPos abs = helper.absolutePos(rel);
+        ChunkRef expected = new ChunkRef(dimension, new ChunkPos(abs.getX() >> 4, abs.getZ() >> 4));
+
+        // A REAL routed write: ServerLevel.setBlock -> LevelChunk.setBlockState (the mixin's target).
+        boolean changed = level.setBlock(abs, Blocks.EMERALD_BLOCK.defaultBlockState(), 3);
+        require(changed, "the real setBlock should change the block (and route through setBlockState)");
+        helper.assertBlockPresent(Blocks.EMERALD_BLOCK, rel);
+
+        Set<ChunkRef> peeked = dirty.peekDirty();
+        require(!peeked.isEmpty(),
+                "the setBlockState mixin must have marked the changed chunk dirty (it fired = end-to-end)");
+        require(peeked.contains(expected),
+                "the dirty set must contain the changed block's chunk " + expected + ", was " + peeked);
 
         helper.succeed();
     }
