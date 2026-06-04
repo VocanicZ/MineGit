@@ -1,21 +1,20 @@
 package com.minegit.mod;
 
+import com.minegit.mod.command.MineGitCommands;
+import com.minegit.mod.command.ServerCommandRuntime;
 import com.minegit.mod.platform.Platform;
 import com.mojang.brigadier.CommandDispatcher;
-import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import dev.architectury.event.events.common.CommandRegistrationEvent;
 import net.minecraft.commands.CommandSourceStack;
-import net.minecraft.commands.Commands;
-import net.minecraft.network.chat.Component;
 import org.eclipse.jgit.lib.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Shared entrypoint, invoked from both loader entrypoints ({@code MineGitFabric#onInitialize} and
- * {@code MineGitNeoForge}'s constructor). The scaffold registers the {@code /minegit} command tree
- * (plus the {@code /mg} and {@code /git} aliases) as a stub so both loaders prove the command path
- * end-to-end; feature batches replace the stub executor with the real subcommands.
+ * {@code MineGitNeoForge}'s constructor). Registers the {@code /minegit} command tree (plus the
+ * {@code /mg} and {@code /git} aliases) on both loaders via Architectury's command-registration
+ * event — the read/setup subcommands {@code init}, {@code status}, {@code log} (Spec D §4, issue #60).
  */
 public final class MineGitMod {
 
@@ -36,21 +35,6 @@ public final class MineGitMod {
     }
 
     static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
-        // Primary literal carries the (stub) behaviour; aliases redirect to it.
-        String primary = MineGitInfo.commandAliases().get(0);
-        LiteralArgumentBuilder<CommandSourceStack> root = Commands.literal(primary)
-                .executes(ctx -> {
-                    ctx.getSource().sendSuccess(
-                            () -> Component.literal(MineGitInfo.MOD_NAME + " ready — engine + JGit loaded (stub)."),
-                            false);
-                    return 1;
-                });
-        var registered = dispatcher.register(root);
-
-        for (String alias : MineGitInfo.commandAliases()) {
-            if (!alias.equals(primary)) {
-                dispatcher.register(Commands.literal(alias).redirect(registered));
-            }
-        }
+        MineGitCommands.register(dispatcher, new ServerCommandRuntime());
     }
 }

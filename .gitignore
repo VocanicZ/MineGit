@@ -18,3 +18,6 @@ mod/*/run/
 .DS_Store
 .harness-task.md
 .claude/
+
+# MC bootstrap logs from headless tests
+mod/*/logs/
