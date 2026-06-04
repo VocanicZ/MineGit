@@ -305,6 +305,73 @@ class MineGitCommandTest {
     }
 
     @Test
+    void diffWithoutRepoTellsPlayerToInit() {
+        Player p = player("world");
+
+        dispatch(p, "diff");
+
+        assertTrue(messages.last().contains("init"), "diff nudges toward /mg init");
+    }
+
+    @Test
+    void diffWorkingTreeShowsSummaryHeaderAndZeroDelta() {
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        dispatch(p, "diff");
+
+        assertTrue(messages.anyContains("Diff"), "diff prints a header");
+        assertTrue(messages.last().contains("+0"), "fresh world matches HEAD: +0/-0/~0 summary");
+    }
+
+    @Test
+    void diffRefVsRefAgainstItselfIsEmpty() {
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        dispatch(p, "diff", "HEAD", "HEAD");
+
+        assertTrue(messages.last().contains("+0"), "HEAD vs HEAD is an empty diff");
+    }
+
+    @Test
+    void diffUnknownRefIsReportedConsistentlyWithCore() {
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        dispatch(p, "diff", "HEAD", "nonexistent");
+
+        // Same loud unknown-ref wording as core #37, not a misleading "everything removed" diff.
+        assertTrue(messages.anyContains("unknown ref"), "unknown ref surfaced loudly");
+        assertTrue(messages.anyContains("nonexistent"), "names the offending ref");
+    }
+
+    @Test
+    void diffWithOneRefShowsUsage() {
+        Player p = player("world");
+        dispatch(p, "init");
+        messages.lines.clear();
+
+        dispatch(p, "diff", "HEAD");
+
+        assertTrue(messages.last().toLowerCase(java.util.Locale.ROOT).contains("usage"),
+                "diff needs zero or two refs");
+    }
+
+    @Test
+    void tabCompletesDiffByPrefix() {
+        Player p = player("world");
+
+        List<String> completions =
+                command().onTabComplete(p, null, "mg", new String[] {"d"});
+
+        assertTrue(completions.contains("diff"), "'d' completes to diff");
+    }
+
+    @Test
     void statusDeniedWithoutUsePermission() {
         World world = mock(World.class);
         lenient().when(world.getName()).thenReturn("world");
