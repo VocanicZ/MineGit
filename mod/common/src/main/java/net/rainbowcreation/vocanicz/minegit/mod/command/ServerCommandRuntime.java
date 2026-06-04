@@ -43,6 +43,10 @@ import net.minecraft.world.level.storage.LevelResource;
  */
 public final class ServerCommandRuntime implements MineGitCommands.Runtime {
 
+    /** TEMP diagnostic logger (issue: diff shows changes but commit says nothing). Remove after triage. */
+    private static final org.slf4j.Logger DEBUG =
+            org.slf4j.LoggerFactory.getLogger("MineGit-DEBUG");
+
     /** Loaded chunks read per server-thread pass, so a commit's reads spread across ticks (Spec D §5). */
     private static final int CHUNKS_PER_TICK = 16;
 
@@ -131,6 +135,9 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         boolean full = MineGitCommands.isFull(ctx);
         Author author = authorFor(player);
         DirtyChunkSet tracker = trackers.tracker(levelKey);
+        DEBUG.info("commit dispatch: level={} trackerId={} primed={} full={} dirtyCount={} dirty={}",
+                levelKey, System.identityHashCode(tracker), tracker.isPrimed(), full,
+                tracker.peekDirty().size(), tracker.peekDirty());
         if (full) {
             tracker.unprime(); // force a full rescan on this commit
         }
@@ -160,10 +167,12 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         }
         CommitInfo commit = result.commit();
         if (commit == null) {
+            DEBUG.info("commit result: level={} -> NOTHING (snapshot matched HEAD)", levelKey);
             source.sendSuccess(() -> MineGitText.notice(
                     "Nothing to commit — '" + levelKey + "' matches HEAD."), false);
             return;
         }
+        DEBUG.info("commit result: level={} -> {} ", levelKey, MineGitText.shortHash(commit.getId()));
         source.sendSuccess(() -> Component.literal("Committed ").withStyle(ChatFormatting.GREEN)
                 .append(Component.literal(MineGitText.shortHash(commit.getId()))
                         .withStyle(ChatFormatting.YELLOW))
@@ -235,7 +244,12 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         String scope;
         try {
             if (refA == null) {
-                diff = MineGitService.status(repoPath, adapter, clock, trackers.tracker(levelKey)); // working-vs-HEAD
+                DirtyChunkSet dtracker = trackers.tracker(levelKey);
+                DEBUG.info("diff dispatch: level={} trackerId={} primed={} path={} dirtyCount={} dirty={}",
+                        levelKey, System.identityHashCode(dtracker), dtracker.isPrimed(),
+                        dtracker.isPrimed() ? "DIRTY(peek)" : "FULL(allChunks)",
+                        dtracker.peekDirty().size(), dtracker.peekDirty());
+                diff = MineGitService.status(repoPath, adapter, clock, dtracker); // working-vs-HEAD
                 scope = levelKey;
             } else {
                 diff = MineGitService.diffRefs(repoPath, adapter, clock, refA, refB);
