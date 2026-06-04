@@ -267,4 +267,41 @@ class MineGitRepoTest {
             assertEquals("A", log.get(0).getMessage(), "ref moved to A under force");
         }
     }
+
+    @Test
+    void diffRefs_unknownRef_failsLoudly_insteadOfDiffingAgainstEmpty(@TempDir Path dir)
+            throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, new BlockState("minecraft:stone"));
+            repo.commit("A", "Steve");
+
+            UnknownRefException ex = assertThrows(
+                    UnknownRefException.class,
+                    () -> WorldDiffer.diffRefs(repo, "HEAD", "nonexistent"),
+                    "an unresolvable ref must throw, not silently diff against an empty tree");
+            assertEquals("nonexistent", ex.getRef(), "exception names the unresolvable ref");
+            assertTrue(
+                    ex.getMessage().contains("nonexistent"),
+                    () -> "message identifies the bad ref: " + ex.getMessage());
+        }
+    }
+
+    @Test
+    void diffRefs_validRefs_stillResolveUnchanged(@TempDir Path dir) throws Exception {
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, new BlockState("minecraft:stone"));
+            repo.commit("A", "Steve");
+            world.setBlock(DimensionId.OVERWORLD, 100, 64, 0, new BlockState("minecraft:dirt"));
+            repo.commit("B", "Steve");
+
+            // Branch name, relative commit, and HEAD all resolve without error.
+            repo.branch("feature");
+            WorldDiff byBranch = WorldDiffer.diffRefs(repo, "feature~1", "feature");
+            WorldDiff byHead = WorldDiffer.diffRefs(repo, "HEAD~1", "HEAD");
+            assertEquals(1, byBranch.getAdded(), "valid branch refs diff normally");
+            assertEquals(1, byHead.getAdded(), "valid HEAD refs diff normally");
+        }
+    }
 }

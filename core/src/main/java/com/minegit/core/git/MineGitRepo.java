@@ -248,6 +248,28 @@ public final class MineGitRepo implements Closeable {
     }
 
     /**
+     * Resolves {@code rev} (a branch name, commit id, {@code HEAD}, or any git revision expression)
+     * to its {@link ObjectId}, failing loudly when it names nothing. Unlike the null-tolerant
+     * {@link #readChunk}/{@link #listChunks}, this is the guard for ref-vs-ref operations (diff,
+     * checkout) where an unresolvable ref must not silently collapse to an empty tree.
+     *
+     * @return the resolved {@link ObjectId}, never {@code null}.
+     * @throws UnknownRefException if {@code rev} resolves to nothing.
+     */
+    public ObjectId requireRef(String rev) {
+        Objects.requireNonNull(rev, "rev");
+        try {
+            ObjectId id = repository.resolve(rev);
+            if (id == null) {
+                throw new UnknownRefException(rev);
+            }
+            return id;
+        } catch (IOException e) {
+            throw new UncheckedIOException("resolve failed for " + rev, e);
+        }
+    }
+
+    /**
      * Decodes the chunk at {@code (dimension, pos)} from the tree of revision {@code rev} (e.g.
      * {@code "HEAD"}, a branch name, or a commit SHA) by reading its {@code .mgc} blob through a
      * {@link TreeWalk}. No working-tree checkout occurs — the bytes come straight from the object
