@@ -27,6 +27,11 @@ dependencies {
     // The engine — shaded + relocated into the plugin jar so it runs 1.8 -> latest with no clashes.
     implementation(project(":core"))
     implementation(project(":protocol"))
+
+    // Bukkit must be on the *test* classpath too: the BlockBridge classes name org.bukkit types in
+    // their method signatures, so loading them (e.g. for a `forVersion(...) instanceof` selection
+    // assertion) requires the API to link. The reflection paths themselves are validated in-game.
+    testImplementation("org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT")
 }
 
 // processResources expands ${version} in plugin.yml so the in-game version matches the build.

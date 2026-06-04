@@ -1,23 +1,30 @@
 package com.minegit.plugin;
 
+import com.minegit.core.mapping.LegacyBlockMapper;
+import com.minegit.plugin.block.BlockBridge;
+import com.minegit.plugin.block.BlockBridges;
 import com.minegit.plugin.version.ServerVersion;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
  * MineGit Spigot plugin entry point (Spec B §2).
  *
- * <p>This first slice is the scaffold: it boots, detects the server version, and exposes it for the
- * {@code BlockBridge} selection that later issues build on. Commands, the Bukkit {@code WorldAdapter},
- * and the block bridges land in follow-up issues (#2–#7).
+ * <p>This first slice is the scaffold: it boots, detects the server version, and selects the
+ * version-appropriate {@code BlockBridge} for cross-version block I/O (Spec B §3). Commands and the
+ * Bukkit {@code WorldAdapter} land in follow-up issues (#3–#7).
  */
 public final class MineGitPlugin extends JavaPlugin {
 
     private ServerVersion serverVersion;
+    private BlockBridge blockBridge;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
         this.serverVersion = detectServerVersion();
+        // Pick the block bridge once from the detected version (#42 -> #43): legacy id/meta vs modern
+        // reflection. The legacy mapper is loaded eagerly; the modern bridge defers its reflection.
+        this.blockBridge = BlockBridges.forVersion(serverVersion, new LegacyBlockMapper());
         getLogger().info("MineGit enabled on server version " + serverVersion
                 + " (" + (serverVersion.isLegacy() ? "legacy" : "modern") + " block bridge)");
     }
@@ -45,5 +52,10 @@ public final class MineGitPlugin extends JavaPlugin {
     /** The server version detected at enable, for BlockBridge selection (Spec B §3). */
     public ServerVersion serverVersion() {
         return serverVersion;
+    }
+
+    /** The block bridge selected for this server, used by the WorldAdapter (Spec B §3, §4). */
+    public BlockBridge blockBridge() {
+        return blockBridge;
     }
 }
