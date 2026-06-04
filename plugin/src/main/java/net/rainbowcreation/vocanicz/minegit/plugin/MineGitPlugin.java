@@ -6,6 +6,7 @@ import net.rainbowcreation.vocanicz.minegit.plugin.block.BlockBridges;
 import net.rainbowcreation.vocanicz.minegit.plugin.command.MessageService;
 import net.rainbowcreation.vocanicz.minegit.plugin.command.MessageServices;
 import net.rainbowcreation.vocanicz.minegit.plugin.command.MineGitCommand;
+import net.rainbowcreation.vocanicz.minegit.plugin.listener.BlockChangeListener;
 import net.rainbowcreation.vocanicz.minegit.plugin.version.ServerVersion;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.AsyncExecutor;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.BukkitWorldAdapter;
@@ -63,6 +64,9 @@ public final class MineGitPlugin extends JavaPlugin {
         this.checkoutService = new CheckoutService(mainThread, async, applyChunksPerTick);
         // Adventure components on modern servers, legacy ChatColor on 1.8-era ones (#45, Spec B §5).
         this.messages = MessageServices.detect();
+        // Block-change listener feeds the same dirty registry so incremental commit/status/diff only
+        // scan chunks that actually moved (Spec E task 6). Registered against the very same instance.
+        getServer().getPluginManager().registerEvents(new BlockChangeListener(worldDirty), this);
         registerCommands();
         getLogger().info("MineGit enabled on server version " + serverVersion
                 + " (" + (serverVersion.isLegacy() ? "legacy" : "modern") + " block bridge)");

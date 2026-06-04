@@ -210,8 +210,13 @@ public final class BukkitWorldAdapter implements WorldAdapter {
         return anyNonAir ? new NormalizedSection(palette, indices) : null;
     }
 
-    /** Maps a Bukkit world environment to the engine's {@link DimensionId}. */
-    private static DimensionId dimensionOf(World world) {
+    /**
+     * Maps a Bukkit world environment to the engine's {@link DimensionId}. Exposed so the block-change
+     * listener (Spec E task 6) builds {@link ChunkRef}s whose dimension {@code .equals(...)} what this
+     * adapter reports via {@link #dimension()} — otherwise commit would read nothing for the chunk.
+     * This is the single source of truth for the environment&rarr;dimension mapping.
+     */
+    public static DimensionId dimensionOf(World world) {
         switch (world.getEnvironment()) {
             case NETHER:
                 return DimensionId.THE_NETHER;
