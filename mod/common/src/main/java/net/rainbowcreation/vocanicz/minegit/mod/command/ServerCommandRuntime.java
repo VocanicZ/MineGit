@@ -283,8 +283,15 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
                 false);
         // Snapshot + dirty-guard reads hop to the server thread, the plan/ref move runs off-thread,
         // applies land back on the server thread (throttled), and completion messages the player there.
-        service.checkout(repoPath, live, clock, target, force,
-                result -> reportCheckout(ctx.getSource(), levelKey, target, result));
+        // On success, unprime the tracker: HEAD has moved, so the dirty set is relative to the old HEAD.
+        // The next commit/status must do a full reconciliation pass against the new baseline.
+        final String capturedLevelKey = levelKey;
+        service.checkout(repoPath, live, clock, target, force, result -> {
+            if (!result.isError()) {
+                trackers.tracker(capturedLevelKey).unprime();
+            }
+            reportCheckout(ctx.getSource(), capturedLevelKey, target, result);
+        });
         return 1;
     }
 

@@ -46,8 +46,14 @@ public final class MineGitService {
     /**
      * Primed-aware working-tree-vs-HEAD diff. When {@code tracker} is primed, only the dirty chunks
      * ({@link net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter#peekDirty()}) are
-     * compared, giving a fast incremental result. On the first call (tracker not yet primed) a full
-     * diff is done and the tracker is primed so the next call is incremental.
+     * compared, giving a fast incremental result. When the tracker is not yet primed, a full diff is
+     * performed and returned — but the tracker is <em>not</em> primed here.
+     *
+     * <p><strong>Status never primes; only commit establishes the primed baseline.</strong> Priming in
+     * status would cause the next incremental commit to trust a dirty set whose starting snapshot was
+     * never recorded as a committed baseline, silently missing changes that occurred before the session
+     * began. The primed flag is set exclusively by {@link net.rainbowcreation.vocanicz.minegit.mod.world.CommitService} when it
+     * completes a full reconciliation pass.
      *
      * @param tracker the per-level dirty set, or {@code null} to always do a full diff (falls back to
      *                the 3-arg {@link #status(Path, WorldAdapter, Clock)})
@@ -60,9 +66,9 @@ public final class MineGitService {
             if (tracker != null && tracker.isPrimed()) {
                 return WorldDiffer.diffWorkingTreeDirty(repo, adapter);
             }
-            WorldDiff full = WorldDiffer.diffWorkingTree(repo, adapter);
-            if (tracker != null) tracker.prime();
-            return full;
+            // Tracker is null or not yet primed: do a full diff but do NOT prime here.
+            // Only CommitService.commit() establishes the primed baseline.
+            return WorldDiffer.diffWorkingTree(repo, adapter);
         }
     }
 

@@ -188,6 +188,31 @@ class MineGitCommandsTest {
     }
 
     @Test
+    void isFullIsTrueOnlyWhenTheFlagIsPresent() {
+        assertFalse(MineGitCommands.isFull(parseCommit("")));
+        assertTrue(MineGitCommands.isFull(parseCommit("--full")));
+    }
+
+    /**
+     * A requirement-free mirror of the commit {@code --full} flag shape, so {@link
+     * MineGitCommands#isFull} can be exercised on a real Brigadier context without a
+     * permission-bearing {@code CommandSourceStack}. The {@code --full} literal matches {@link
+     * MineGitCommands#FULL_FLAG}.
+     */
+    private static CommandContext<CommandSourceStack> parseCommit(String tail) {
+        CommandDispatcher<CommandSourceStack> dispatcher =
+                new CommandDispatcher<CommandSourceStack>();
+        dispatcher.register(com.mojang.brigadier.builder.LiteralArgumentBuilder
+                .<CommandSourceStack>literal("t")
+                .executes(c -> 1)
+                .then(com.mojang.brigadier.builder.LiteralArgumentBuilder
+                        .<CommandSourceStack>literal("--full")
+                        .executes(c -> 1)));
+        String input = tail.isEmpty() ? "t" : "t " + tail;
+        return dispatcher.parse(input, (CommandSourceStack) null).getContext().build(input);
+    }
+
+    @Test
     void diffAcceptsAnOptionalRefPairForRefVsRef() {
         CommandNode<CommandSourceStack> diff =
                 registered().getRoot().getChild("minegit").getChild("diff");
