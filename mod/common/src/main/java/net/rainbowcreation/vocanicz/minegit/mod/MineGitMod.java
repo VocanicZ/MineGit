@@ -6,6 +6,7 @@ import net.rainbowcreation.vocanicz.minegit.mod.platform.Platform;
 import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTracking;
 import com.mojang.brigadier.CommandDispatcher;
 import dev.architectury.event.events.common.CommandRegistrationEvent;
+import dev.architectury.event.events.common.TickEvent;
 import net.minecraft.commands.CommandSourceStack;
 import org.eclipse.jgit.lib.Constants;
 import org.slf4j.Logger;
@@ -44,6 +45,10 @@ public final class MineGitMod {
         // any command fires, so a block change before the first command still lands in the right set.
         DirtyTracking.install(sharedRuntime().trackers());
         CommandRegistrationEvent.EVENT.register((dispatcher, registry, selection) -> registerCommands(dispatcher));
+        // Drain a slice of throttled commit/checkout work each server tick, so a whole-world scan
+        // spreads over many ticks instead of freezing one ("Can't keep up!"). Fires on the server
+        // thread, where the queued level reads/applies are safe.
+        TickEvent.SERVER_POST.register(server -> sharedRuntime().tick());
     }
 
     static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {

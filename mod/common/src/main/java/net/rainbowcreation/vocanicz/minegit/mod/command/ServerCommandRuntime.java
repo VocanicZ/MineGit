@@ -11,10 +11,9 @@ import net.rainbowcreation.vocanicz.minegit.mod.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CommitService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTrackerRegistry;
 import net.rainbowcreation.vocanicz.minegit.mod.world.LevelRepoRegistry;
-import net.rainbowcreation.vocanicz.minegit.mod.world.MinecraftServerThread;
 import net.rainbowcreation.vocanicz.minegit.mod.world.ModWorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.mod.world.ServerLevelAccess;
-import net.rainbowcreation.vocanicz.minegit.mod.world.ServerThreadScheduler;
+import net.rainbowcreation.vocanicz.minegit.mod.world.TickPump;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import java.nio.file.Path;
@@ -43,12 +42,24 @@ import net.minecraft.world.level.storage.LevelResource;
  */
 public final class ServerCommandRuntime implements MineGitCommands.Runtime {
 
-    /** Loaded chunks read per server-thread pass, so a commit's reads spread across ticks (Spec D §5). */
-    private static final int CHUNKS_PER_TICK = 16;
+    /**
+     * Loaded chunks read/applied per batch. Each batch is one re-submitted task on the {@link #pump};
+     * the pump's per-tick time budget decides how many batches run in a tick, so this only needs to be
+     * small enough that a single batch stays well under that budget (Spec D §5).
+     */
+    private static final int CHUNKS_PER_TICK = 8;
 
     private final Clock clock;
     private final Executor background;
     private final DirtyTrackerRegistry trackers = new DirtyTrackerRegistry();
+
+    /**
+     * The server-lifetime server-thread executor. Commit/checkout reads and applies are queued here and
+     * drained across ticks by {@link #tick()} (wired to a server-tick event), so a whole-world scan
+     * spreads over many ticks instead of freezing one. Shared across commands so a single tick handler
+     * drains all in-flight operations.
+     */
+    private final TickPump pump = new TickPump();
 
     public ServerCommandRuntime() {
         this(Clock.systemUTC());
@@ -67,6 +78,14 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
     /** Exposes the server-lifetime dirty tracker registry (for wiring mixin events). */
     public DirtyTrackerRegistry trackers() {
         return trackers;
+    }
+
+    /**
+     * Drains a slice of queued commit/checkout work on the server thread. Wire to a server-tick event
+     * (once per tick) so throttled reads/applies make progress without freezing the tick.
+     */
+    public void tick() {
+        pump.pump();
     }
 
     @Override
@@ -136,9 +155,7 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         }
         WorldAdapter live = adapterFor(level);
         Path repoPath = registry.repoPath(levelKey);
-        Executor serverThread = new ServerThreadScheduler(
-                new MinecraftServerThread(ctx.getSource().getServer()));
-        CommitService service = new CommitService(serverThread, background, CHUNKS_PER_TICK);
+        CommitService service = new CommitService(pump, background, CHUNKS_PER_TICK);
 
         ctx.getSource().sendSuccess(
                 () -> MineGitText.notice("Committing '" + levelKey + "'…"), false);
@@ -274,9 +291,7 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         boolean force = MineGitCommands.isForce(ctx);
         WorldAdapter live = adapterFor(level);
         Path repoPath = registry.repoPath(levelKey);
-        Executor serverThread = new ServerThreadScheduler(
-                new MinecraftServerThread(ctx.getSource().getServer()));
-        CheckoutService service = new CheckoutService(serverThread, background, CHUNKS_PER_TICK);
+        CheckoutService service = new CheckoutService(pump, background, CHUNKS_PER_TICK);
 
         ctx.getSource().sendSuccess(
                 () -> MineGitText.notice("Checking out '" + target + "' in '" + levelKey + "'…"),
