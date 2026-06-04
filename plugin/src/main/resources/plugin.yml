@@ -1,0 +1,22 @@
+name: MineGit
+main: com.minegit.plugin.MineGitPlugin
+version: ${version}
+author: MineGit
+description: Version-control a live Minecraft world from in-game (git for your world).
+# api-version is deliberately omitted: declaring one (>=1.13) would stop the jar loading on 1.8-era
+# servers. Omitting it makes the server treat the plugin as legacy, which loads everywhere 1.8 -> latest.
+
+commands:
+  minegit:
+    description: MineGit world version control.
+    usage: /minegit <init|status|commit|log|diff|checkout>
+    aliases: [mg, git]
+    permission: minegit.use
+
+permissions:
+  minegit.use:
+    description: Use read/commit MineGit commands.
+    default: true
+  minegit.admin:
+    description: Use destructive MineGit commands (e.g. checkout).
+    default: op
