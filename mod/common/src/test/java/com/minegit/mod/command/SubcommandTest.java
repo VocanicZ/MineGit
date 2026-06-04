@@ -11,8 +11,8 @@ import org.junit.jupiter.api.Test;
 class SubcommandTest {
 
     @Test
-    void literalsAreTheReadSetupCommitSetInOrder() {
-        assertEquals(Arrays.asList("init", "status", "commit", "log"), Subcommand.literals());
+    void literalsAreTheReadSetupCommitDiffSetInOrder() {
+        assertEquals(Arrays.asList("init", "status", "commit", "log", "diff"), Subcommand.literals());
     }
 
     @Test

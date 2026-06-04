@@ -42,6 +42,23 @@ public final class MineGitService {
         }
     }
 
+    /**
+     * The ref-vs-ref diff for {@code repoDir}: committed {@code refA} (before) against {@code refB}
+     * (after). Throws {@link com.minegit.core.git.UnknownRefException} when either ref resolves to
+     * nothing, so an unresolvable ref never silently collapses to a misleading empty-tree diff.
+     */
+    public static WorldDiff diffRefs(
+            Path repoDir, WorldAdapter adapter, Clock clock, String refA, String refB) {
+        Objects.requireNonNull(repoDir, "repoDir");
+        Objects.requireNonNull(adapter, "adapter");
+        Objects.requireNonNull(clock, "clock");
+        Objects.requireNonNull(refA, "refA");
+        Objects.requireNonNull(refB, "refB");
+        try (MineGitRepo repo = MineGitRepo.open(repoDir, adapter, clock)) {
+            return WorldDiffer.diffRefs(repo, refA, refB);
+        }
+    }
+
     /** The commit history at {@code repoDir}, newest first. */
     public static List<CommitInfo> log(Path repoDir, WorldAdapter adapter, Clock clock) {
         Objects.requireNonNull(repoDir, "repoDir");

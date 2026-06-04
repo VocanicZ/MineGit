@@ -49,6 +49,11 @@ class MineGitCommandsTest {
         public int log(CommandContext<CommandSourceStack> ctx) {
             return 1;
         }
+
+        @Override
+        public int diff(CommandContext<CommandSourceStack> ctx) {
+            return 1;
+        }
     };
 
     private CommandDispatcher<CommandSourceStack> registered() {
@@ -65,9 +70,10 @@ class MineGitCommandsTest {
         for (CommandNode<CommandSourceStack> child : root.getChildren()) {
             children.add(child.getName());
         }
-        assertTrue(children.containsAll(java.util.Arrays.asList("init", "status", "commit", "log")),
+        assertTrue(children.containsAll(
+                        java.util.Arrays.asList("init", "status", "commit", "log", "diff")),
                 "subcommands missing: " + children);
-        assertEquals(4, children.size());
+        assertEquals(5, children.size());
     }
 
     @Test
@@ -116,6 +122,21 @@ class MineGitCommandsTest {
     void messageOfFallsBackToTheDefaultWhenNoArgumentIsPresent() {
         assertEquals(MineGitCommands.DEFAULT_COMMIT_MESSAGE,
                 MineGitCommands.messageOf(parseMessageArg("")));
+    }
+
+    @Test
+    void diffAcceptsAnOptionalRefPairForRefVsRef() {
+        CommandNode<CommandSourceStack> diff =
+                registered().getRoot().getChild("minegit").getChild("diff");
+        assertNotNull(diff, "/minegit diff should be registered");
+        // Bare /mg diff runs (working-vs-HEAD), so the literal itself is executable...
+        assertNotNull(diff.getCommand(), "bare /mg diff should be executable (working-vs-HEAD)");
+        // ...and /mg diff <refA> <refB> nests two string arguments for ref-vs-ref.
+        CommandNode<CommandSourceStack> refA = diff.getChild("refA");
+        assertNotNull(refA, "/mg diff should take a first ref argument");
+        CommandNode<CommandSourceStack> refB = refA.getChild("refB");
+        assertNotNull(refB, "/mg diff <refA> should take a second ref argument");
+        assertNotNull(refB.getCommand(), "/mg diff <refA> <refB> should be executable");
     }
 
     @Test
