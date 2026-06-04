@@ -87,6 +87,12 @@ public final class BukkitWorldAdapter implements WorldAdapter {
     }
 
     @Override
+    public Set<ChunkRef> peekDirty() {
+        // Placeholder until event-based dirty tracking is wired (Spec E task 5).
+        return allChunks();
+    }
+
+    @Override
     public NormalizedChunk read(DimensionId requested, ChunkPos pos) {
         Objects.requireNonNull(requested, "dimension");
         Objects.requireNonNull(pos, "pos");

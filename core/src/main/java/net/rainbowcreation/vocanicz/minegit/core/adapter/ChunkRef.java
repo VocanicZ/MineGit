@@ -7,8 +7,9 @@ import java.util.Objects;
 /**
  * Immutable locator for a single chunk within a world: a {@link DimensionId} plus a {@link ChunkPos}.
  *
- * <p>{@link WorldAdapter#allChunks()} and {@link WorldAdapter#drainDirty()} return sets of these so
- * the commit loop can iterate {@code (dim, pos)} pairs and call {@link WorldAdapter#read} for each.
+ * <p>{@link WorldAdapter#allChunks()}, {@link WorldAdapter#drainDirty()}, and {@link
+ * WorldAdapter#peekDirty()} return sets of these so the commit/diff loops can iterate {@code (dim, pos)}
+ * pairs and call {@link WorldAdapter#read} for each.
  */
 public final class ChunkRef {
 

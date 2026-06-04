@@ -160,6 +160,11 @@ public final class FakeWorldAdapter implements WorldAdapter {
     }
 
     @Override
+    public Set<ChunkRef> peekDirty() {
+        return new HashSet<ChunkRef>(dirty);
+    }
+
+    @Override
     public void apply(
             DimensionId dimension,
             ChunkPos pos,

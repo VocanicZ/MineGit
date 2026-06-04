@@ -94,6 +94,11 @@ class MineGitCommandTest {
         }
 
         @Override
+        public Set<ChunkRef> peekDirty() {
+            return Collections.emptySet();
+        }
+
+        @Override
         public void apply(DimensionId dimension, ChunkPos pos, List<BlockChange> changes) {}
 
         @Override

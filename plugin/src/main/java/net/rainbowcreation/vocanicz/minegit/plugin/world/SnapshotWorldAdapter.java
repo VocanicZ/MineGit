@@ -67,6 +67,12 @@ public final class SnapshotWorldAdapter implements WorldAdapter {
     }
 
     @Override
+    public Set<ChunkRef> peekDirty() {
+        // Placeholder until event-based dirty tracking is wired (Spec E task 5).
+        return allChunks();
+    }
+
+    @Override
     public void apply(DimensionId dimension, ChunkPos pos, List<BlockChange> changes) {
         throw new UnsupportedOperationException("SnapshotWorldAdapter is read-only");
     }

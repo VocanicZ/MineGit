@@ -41,6 +41,16 @@ public interface WorldAdapter {
     Set<ChunkRef> drainDirty();
 
     /**
+     * Returns a snapshot of the current dirty set <strong>without clearing it</strong>. Used by
+     * {@code /mg status} and {@code /mg diff}, which need to see the candidate chunk set but must not
+     * disturb it so that a subsequent {@code /mg commit} still drains the same refs.
+     *
+     * <p>Implementations that do not yet have event-based tracking should return {@link #allChunks()}
+     * as a behavior-preserving placeholder until proper tracking is wired in.
+     */
+    Set<ChunkRef> peekDirty();
+
+    /**
      * Applies a chunk's worth of {@link BlockChange}s to the world, mutating it toward a checkout
      * target. For each change the world is set to the change's {@linkplain BlockChange#getNewState()
      * new state} (an {@link BlockChange.Kind#ADD} or {@link BlockChange.Kind#CHANGE}) or back to air
