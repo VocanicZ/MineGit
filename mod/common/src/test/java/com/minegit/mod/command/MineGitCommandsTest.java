@@ -1,7 +1,9 @@
 package com.minegit.mod.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -54,6 +56,11 @@ class MineGitCommandsTest {
         public int diff(CommandContext<CommandSourceStack> ctx) {
             return 1;
         }
+
+        @Override
+        public int checkout(CommandContext<CommandSourceStack> ctx) {
+            return 1;
+        }
     };
 
     private CommandDispatcher<CommandSourceStack> registered() {
@@ -71,9 +78,60 @@ class MineGitCommandsTest {
             children.add(child.getName());
         }
         assertTrue(children.containsAll(
-                        java.util.Arrays.asList("init", "status", "commit", "log", "diff")),
+                        java.util.Arrays.asList("init", "status", "commit", "log", "diff", "checkout")),
                 "subcommands missing: " + children);
-        assertEquals(5, children.size());
+        assertEquals(6, children.size());
+    }
+
+    @Test
+    void checkoutTakesARequiredRefAndAnOptionalForceFlag() {
+        CommandNode<CommandSourceStack> checkout =
+                registered().getRoot().getChild("minegit").getChild("checkout");
+        assertNotNull(checkout, "/minegit checkout should be registered");
+        // Bare `/mg checkout` carries no target, so the literal itself is not executable.
+        assertNull(checkout.getCommand(), "bare /mg checkout has no target — not executable");
+        // `/mg checkout <ref>` is executable (force defaults off)…
+        CommandNode<CommandSourceStack> ref = checkout.getChild("ref");
+        assertNotNull(ref, "/mg checkout should take a ref argument");
+        assertNotNull(ref.getCommand(), "/mg checkout <ref> should execute");
+        // …and `/mg checkout <ref> --force` nests the force flag and is also executable.
+        CommandNode<CommandSourceStack> force = ref.getChild("--force");
+        assertNotNull(force, "/mg checkout <ref> should accept --force");
+        assertNotNull(force.getCommand(), "/mg checkout <ref> --force should execute");
+    }
+
+    @Test
+    void refOfReadsTheCheckoutTarget() {
+        assertEquals("main", MineGitCommands.refOf(parseCheckout("main")));
+        assertEquals("abc123", MineGitCommands.refOf(parseCheckout("abc123 --force")));
+    }
+
+    @Test
+    void isForceIsTrueOnlyWhenTheFlagIsPresent() {
+        assertFalse(MineGitCommands.isForce(parseCheckout("abc123")));
+        assertTrue(MineGitCommands.isForce(parseCheckout("abc123 --force")));
+    }
+
+    /**
+     * A requirement-free mirror of the checkout argument shape, so {@link MineGitCommands#refOf} and
+     * {@link MineGitCommands#isForce} can be exercised on a real Brigadier context without a
+     * permission-bearing {@code CommandSourceStack}. The {@code ref} arg name and {@code --force}
+     * literal match {@link MineGitCommands}.
+     */
+    private static CommandContext<CommandSourceStack> parseCheckout(String tail) {
+        CommandDispatcher<CommandSourceStack> dispatcher =
+                new CommandDispatcher<CommandSourceStack>();
+        dispatcher.register(com.mojang.brigadier.builder.LiteralArgumentBuilder
+                .<CommandSourceStack>literal("t")
+                .then(com.mojang.brigadier.builder.RequiredArgumentBuilder
+                        .<CommandSourceStack, String>argument("ref",
+                                com.mojang.brigadier.arguments.StringArgumentType.string())
+                        .executes(c -> 1)
+                        .then(com.mojang.brigadier.builder.LiteralArgumentBuilder
+                                .<CommandSourceStack>literal("--force")
+                                .executes(c -> 1))));
+        String input = "t " + tail;
+        return dispatcher.parse(input, (CommandSourceStack) null).getContext().build(input);
     }
 
     @Test
