@@ -1,0 +1,8 @@
+# MineGit plugin configuration.
+# First slice (Spec B batch 1) is local, blocks-only, loaded-chunks. Remote/GitHub wiring comes later.
+
+# Where per-world repos live, relative to the plugin data folder (plugins/MineGit/).
+repos-dir: repos
+
+# How many chunks to apply per server tick during checkout (main-thread throttle, Spec B §6).
+checkout-chunks-per-tick: 4
