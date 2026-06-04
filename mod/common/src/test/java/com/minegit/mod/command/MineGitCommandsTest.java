@@ -41,6 +41,11 @@ class MineGitCommandsTest {
         }
 
         @Override
+        public int commit(CommandContext<CommandSourceStack> ctx) {
+            return 1;
+        }
+
+        @Override
         public int log(CommandContext<CommandSourceStack> ctx) {
             return 1;
         }
@@ -65,9 +70,58 @@ class MineGitCommandsTest {
         for (CommandNode<CommandSourceStack> child : root.getChildren()) {
             children.add(child.getName());
         }
-        assertTrue(children.containsAll(java.util.Arrays.asList("init", "status", "log", "diff")),
+        assertTrue(children.containsAll(
+                        java.util.Arrays.asList("init", "status", "commit", "log", "diff")),
                 "subcommands missing: " + children);
-        assertEquals(4, children.size());
+        assertEquals(5, children.size());
+    }
+
+    @Test
+    void commitTakesAnOptionalDashMMessageArgument() {
+        CommandNode<CommandSourceStack> commit =
+                registered().getRoot().getChild("minegit").getChild("commit");
+        assertNotNull(commit, "/minegit commit should be registered");
+        // Bare `/mg commit` is runnable (default message)…
+        assertNotNull(commit.getCommand(), "bare commit should execute");
+        // …and `/mg commit -m <message>` carries a greedy message argument.
+        CommandNode<CommandSourceStack> dashM = commit.getChild("-m");
+        assertNotNull(dashM, "commit should accept -m");
+        CommandNode<CommandSourceStack> message = dashM.getChild("message");
+        assertNotNull(message, "-m should be followed by a message argument");
+        assertNotNull(message.getCommand(), "the message form should execute");
+    }
+
+    /**
+     * A requirement-free mirror of the commit argument shape, so {@link MineGitCommands#messageOf}
+     * can be exercised on a real Brigadier context without a permission-bearing {@code
+     * CommandSourceStack} (parsing the gated tree needs a live source). The greedy {@code message}
+     * arg name matches {@link MineGitCommands#MESSAGE_ARG}.
+     */
+    private static CommandContext<CommandSourceStack> parseMessageArg(String tail) {
+        CommandDispatcher<CommandSourceStack> dispatcher =
+                new CommandDispatcher<CommandSourceStack>();
+        dispatcher.register(com.mojang.brigadier.builder.LiteralArgumentBuilder
+                .<CommandSourceStack>literal("t")
+                .executes(c -> 1)
+                .then(com.mojang.brigadier.builder.RequiredArgumentBuilder
+                        .<CommandSourceStack, String>argument("message",
+                                com.mojang.brigadier.arguments.StringArgumentType.greedyString())
+                        .executes(c -> 1)));
+        String input = tail.isEmpty() ? "t" : "t " + tail;
+        return dispatcher.parse(input, (CommandSourceStack) null).getContext().build(input);
+    }
+
+    @Test
+    void messageOfReadsTheGreedyDashMArgument() {
+        // The greedy argument captures the whole tail verbatim.
+        assertEquals("build a tall tower",
+                MineGitCommands.messageOf(parseMessageArg("build a tall tower")));
+    }
+
+    @Test
+    void messageOfFallsBackToTheDefaultWhenNoArgumentIsPresent() {
+        assertEquals(MineGitCommands.DEFAULT_COMMIT_MESSAGE,
+                MineGitCommands.messageOf(parseMessageArg("")));
     }
 
     @Test
