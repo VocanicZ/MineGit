@@ -4,10 +4,10 @@
   "package": "net.rainbowcreation.vocanicz.minegit.mod.mixin",
   "compatibilityLevel": "JAVA_21",
   "refmap": "minegit.refmap.json",
-  "mixins": [],
-  "server": [
+  "mixins": [
     "LevelChunkMixin"
   ],
+  "server": [],
   "client": [],
   "injectors": {
     "defaultRequire": 1

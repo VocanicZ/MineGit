@@ -1,5 +1,6 @@
 package net.rainbowcreation.vocanicz.minegit.core.diff;
 
+import net.rainbowcreation.vocanicz.minegit.core.adapter.ChunkRef;
 import net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.core.git.MineGitRepo;
 import net.rainbowcreation.vocanicz.minegit.core.model.BlockChange;
@@ -58,13 +59,85 @@ public final class WorldDiffer {
      * construction (they have not been touched since the last drain), so they are skipped entirely —
      * that is the performance win over {@link #diffWorkingTree}.
      *
-     * <p>Argument order matches {@link #diffWorkingTree}: tree is "before" (a), live is "after" (b),
-     * so ADD/REMOVE/CHANGE polarity is identical.
+     * <p><strong>Truly dirty-scoped.</strong> Iteration is driven by {@code peekDirty()} alone (via
+     * {@link #diffAt}); the {@code HEAD} tree is read only at those positions. This is deliberate so
+     * that {@code /mg diff} sees exactly what {@code /mg commit} commits (which drains the same set) —
+     * a change in a chunk the tracker never marked is invisible to <em>both</em>, and {@code
+     * /mg rescan} / {@code /mg commit --full} are the escape hatch. An earlier version diffed the
+     * whole tree against the live world, so it silently fell back to a full scan and reported changes
+     * the dirty-set commit would not capture, producing the confusing "diff shows changes but commit
+     * says nothing".
+     *
+     * <p>Argument order matches {@link #diffWorkingTree}: tree is "before", live is "after", so
+     * ADD/REMOVE/CHANGE polarity is identical.
      */
     public static WorldDiff diffWorkingTreeDirty(MineGitRepo repo, WorldAdapter adapter) {
         Objects.requireNonNull(repo, "repo");
         Objects.requireNonNull(adapter, "adapter");
-        return diff(ChunkSources.tree(repo, "HEAD"), ChunkSources.liveDirty(adapter));
+        return diffAt(ChunkSources.tree(repo, "HEAD"), ChunkSources.live(adapter), adapter.peekDirty());
+    }
+
+    /**
+     * Diffs {@code before} against {@code after} at <em>only</em> the chunk positions in {@code refs}.
+     * Chunks outside {@code refs} are never read, so this is the real incremental path: cost scales
+     * with the dirty-set size, not the world size. Output is deterministic — ordered by dimension then
+     * {@code (cx, cz)} — matching {@link #diff(ChunkSource, ChunkSource)}.
+     */
+    public static WorldDiff diffAt(ChunkSource before, ChunkSource after, Set<ChunkRef> refs) {
+        Objects.requireNonNull(before, "before");
+        Objects.requireNonNull(after, "after");
+        Objects.requireNonNull(refs, "refs");
+
+        Map<DimensionId, List<ChunkPos>> positionsByDim = new HashMap<DimensionId, List<ChunkPos>>();
+        for (ChunkRef ref : refs) {
+            List<ChunkPos> list = positionsByDim.get(ref.getDimension());
+            if (list == null) {
+                list = new ArrayList<ChunkPos>();
+                positionsByDim.put(ref.getDimension(), list);
+            }
+            list.add(ref.getPos());
+        }
+
+        Map<DimensionId, List<ChunkDiff>> byDim = new HashMap<DimensionId, List<ChunkDiff>>();
+        int added = 0;
+        int removed = 0;
+        int changed = 0;
+        for (Map.Entry<DimensionId, List<ChunkPos>> entry : positionsByDim.entrySet()) {
+            DimensionId dim = entry.getKey();
+            List<ChunkPos> ordered = entry.getValue();
+            ordered.sort(CHUNK_POS_ORDER);
+            List<ChunkDiff> chunkDiffs = new ArrayList<ChunkDiff>();
+            for (ChunkPos pos : ordered) {
+                NormalizedChunk ca = before.read(dim, pos);
+                NormalizedChunk cb = after.read(dim, pos);
+                if (Objects.equals(ca, cb)) {
+                    continue;
+                }
+                List<BlockChange> changes = diffChunk(pos, ca, cb);
+                for (BlockChange c : changes) {
+                    switch (c.getKind()) {
+                        case ADD:
+                            added++;
+                            break;
+                        case REMOVE:
+                            removed++;
+                            break;
+                        case CHANGE:
+                            changed++;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                if (!changes.isEmpty()) {
+                    chunkDiffs.add(new ChunkDiff(pos, changes));
+                }
+            }
+            if (!chunkDiffs.isEmpty()) {
+                byDim.put(dim, chunkDiffs);
+            }
+        }
+        return new WorldDiff(byDim, added, removed, changed);
     }
 
     /** Diffs two committed revisions, {@code revA} (before) against {@code revB} (after). */
