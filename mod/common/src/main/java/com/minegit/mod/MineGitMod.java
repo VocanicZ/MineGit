@@ -20,6 +20,13 @@ public final class MineGitMod {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MineGitInfo.MOD_NAME);
 
+    /**
+     * The one command runtime, shared across every {@code CommandRegistrationEvent} firing. The event
+     * re-fires on each {@code /reload}, so building a fresh runtime per firing would leak the runtime's
+     * single {@code minegit-git} daemon executor each time (issue #73). Built lazily and reused.
+     */
+    private static volatile ServerCommandRuntime sharedRuntime;
+
     private MineGitMod() {
     }
 
@@ -35,6 +42,14 @@ public final class MineGitMod {
     }
 
     static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
-        MineGitCommands.register(dispatcher, new ServerCommandRuntime());
+        MineGitCommands.register(dispatcher, sharedRuntime());
+    }
+
+    /** The shared command runtime, created once on first use and reused across registrations (#73). */
+    static synchronized ServerCommandRuntime sharedRuntime() {
+        if (sharedRuntime == null) {
+            sharedRuntime = new ServerCommandRuntime();
+        }
+        return sharedRuntime;
     }
 }
