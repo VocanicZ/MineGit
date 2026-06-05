@@ -6,7 +6,10 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import com.mojang.brigadier.tree.LiteralCommandNode;
+import java.util.concurrent.CompletableFuture;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -54,6 +57,15 @@ public final class MineGitCommands {
 
         int rescan(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx)
                 throws CommandSyntaxException;
+
+        /**
+         * Tab-completion for a ref argument ({@code checkout <ref>}, {@code diff <refA> <refB>}):
+         * suggests {@code HEAD}/{@code HEAD~N} aliases, branch names, and recent commit short-hashes
+         * (commit message as tooltip). Must never throw — a repo hiccup yields no suggestions.
+         */
+        CompletableFuture<Suggestions> suggestRefs(
+                com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx,
+                SuggestionsBuilder builder);
     }
 
     /** Brigadier argument name carrying the {@code /mg commit -m <message>} text. */
@@ -157,6 +169,7 @@ public final class MineGitCommands {
         return Commands.literal(Subcommand.CHECKOUT.literal())
                 .requires(Commands.hasPermission(permissionCheck(Subcommand.CHECKOUT.permissionLevel())))
                 .then(Commands.argument(REF_ARG, StringArgumentType.string())
+                        .suggests(runtime::suggestRefs)
                         .executes(action)
                         .then(Commands.literal(FORCE_FLAG).executes(action)));
     }
@@ -173,7 +186,9 @@ public final class MineGitCommands {
                 .requires(Commands.hasPermission(permissionCheck(Subcommand.DIFF.permissionLevel())))
                 .executes(action)
                 .then(Commands.argument("refA", StringArgumentType.string())
+                        .suggests(runtime::suggestRefs)
                         .then(Commands.argument("refB", StringArgumentType.string())
+                                .suggests(runtime::suggestRefs)
                                 .executes(action)));
     }
 

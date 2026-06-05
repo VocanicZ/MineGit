@@ -3,12 +3,15 @@ package net.rainbowcreation.vocanicz.minegit.mod.command;
 import net.rainbowcreation.vocanicz.minegit.core.adapter.DirtyChunkSet;
 import net.rainbowcreation.vocanicz.minegit.core.adapter.WorldAdapter;
 import net.rainbowcreation.vocanicz.minegit.core.diff.WorldDiffer;
+import net.rainbowcreation.vocanicz.minegit.core.git.BranchRef;
 import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
 import net.rainbowcreation.vocanicz.minegit.core.git.MineGitRepo;
 import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -96,6 +99,57 @@ public final class MineGitService {
         Objects.requireNonNull(clock, "clock");
         try (MineGitRepo repo = MineGitRepo.open(repoDir, adapter, clock)) {
             return repo.log();
+        }
+    }
+
+    /** How many recent commits {@link #refCatalog} offers as ref suggestions. */
+    static final int REF_SUGGEST_COMMIT_CAP = 50;
+
+    /**
+     * The catalogue of checkout/diff ref candidates for {@code repoDir} in one repo open: branch names
+     * then the {@value #REF_SUGGEST_COMMIT_CAP} most recent commit short-hashes, each mapped to a short
+     * tooltip (branch kind / commit message), plus the total commit count so the caller can offer the
+     * matching {@code HEAD~N} aliases. Drives {@code /mg checkout}/{@code /mg diff} tab-completion.
+     */
+    public static RefCatalog refCatalog(Path repoDir, WorldAdapter adapter, Clock clock) {
+        Objects.requireNonNull(repoDir, "repoDir");
+        Objects.requireNonNull(adapter, "adapter");
+        Objects.requireNonNull(clock, "clock");
+        LinkedHashMap<String, String> refs = new LinkedHashMap<String, String>();
+        int commitCount;
+        try (MineGitRepo repo = MineGitRepo.open(repoDir, adapter, clock)) {
+            for (BranchRef branch : repo.branches()) {
+                refs.putIfAbsent(branch.getName(), branch.isRemote() ? "remote branch" : "branch");
+            }
+            List<CommitInfo> log = repo.log();
+            commitCount = log.size();
+            int cap = Math.min(log.size(), REF_SUGGEST_COMMIT_CAP);
+            for (int i = 0; i < cap; i++) {
+                CommitInfo commit = log.get(i);
+                refs.putIfAbsent(MineGitText.shortHash(commit.getId()), MineGitText.firstLine(commit.getMessage()));
+            }
+        }
+        return new RefCatalog(refs, commitCount);
+    }
+
+    /** Ref suggestions ({@code value -> tooltip}, insertion-ordered) plus the repo's commit count. */
+    public static final class RefCatalog {
+        private final Map<String, String> refs;
+        private final int commitCount;
+
+        RefCatalog(Map<String, String> refs, int commitCount) {
+            this.refs = refs;
+            this.commitCount = commitCount;
+        }
+
+        /** Suggestable refs (branch names, then recent short-hashes) mapped to their tooltip text. */
+        public Map<String, String> refs() {
+            return refs;
+        }
+
+        /** Total number of commits in the repo (for offering {@code HEAD~N} aliases). */
+        public int commitCount() {
+            return commitCount;
         }
     }
 }

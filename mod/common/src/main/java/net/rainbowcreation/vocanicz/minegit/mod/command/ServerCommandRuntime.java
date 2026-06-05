@@ -16,9 +16,15 @@ import net.rainbowcreation.vocanicz.minegit.mod.world.ServerLevelAccess;
 import net.rainbowcreation.vocanicz.minegit.mod.world.TickPump;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
@@ -104,11 +110,22 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
             return 0;
         }
         WorldAdapter adapter = adapterFor(level);
-        MineGitService.init(registry.repoPath(levelKey), adapter, clock);
+        Path repoPath = registry.repoPath(levelKey);
+        MineGitService.init(repoPath, adapter, clock);
         registry.bind(levelKey); // mark bound only once the git repo actually exists
         ctx.getSource().sendSuccess(
-                () -> MineGitText.good("Initialized MineGit repo for level '" + levelKey + "'."),
+                () -> MineGitText.good(
+                        "Initialized MineGit repo for level '" + levelKey + "' — snapshotting world…"),
                 false);
+        // Capture the current world as the initial commit, so init is a real baseline you can check out
+        // to (rather than a chunk-less metadata commit that would empty the world). Throttled through
+        // the same tick pump as /mg commit, so a large world doesn't freeze the tick. The tracker is
+        // unprimed here, so this does the full-world scan and primes it for incremental commits after.
+        Author author = authorFor(player);
+        DirtyChunkSet tracker = trackers.tracker(levelKey);
+        CommitService service = new CommitService(pump, background, CHUNKS_PER_TICK);
+        service.commit(repoPath, adapter, clock, "Initial world snapshot", author, tracker,
+                result -> reportCommit(ctx.getSource(), levelKey, result));
         return 1;
     }
 
@@ -347,6 +364,73 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
                 () -> MineGitText.good("MineGit will do a full rescan on the next commit/status."),
                 false);
         return 1;
+    }
+
+    /** The most {@code HEAD~N} aliases to offer (beyond bare {@code HEAD}). */
+    private static final int HEAD_ALIAS_CAP = 9;
+
+    @Override
+    public CompletableFuture<Suggestions> suggestRefs(
+            CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            return builder.buildFuture();
+        }
+        ServerLevel level = player.level();
+        String levelKey = levelKey(level);
+        LevelRepoRegistry registry = registryFor(ctx.getSource().getServer());
+        if (!registry.isBound(levelKey)) {
+            return builder.buildFuture();
+        }
+        MineGitService.RefCatalog catalog;
+        try {
+            catalog = MineGitService.refCatalog(registry.repoPath(levelKey), adapterFor(level), clock);
+        } catch (RuntimeException broken) {
+            // Tab-completion must never fail the command line; a repo hiccup just yields no suggestions.
+            return builder.buildFuture();
+        }
+
+        // HEAD / HEAD~N aliases first, then branches + recent commit short-hashes from the catalogue.
+        LinkedHashMap<String, String> all = new LinkedHashMap<String, String>();
+        all.put("HEAD", "current commit");
+        int back = Math.min(catalog.commitCount() - 1, HEAD_ALIAS_CAP);
+        for (int n = 1; n <= back; n++) {
+            all.put("HEAD~" + n, n == 1 ? "1 commit back" : n + " commits back");
+        }
+        all.putAll(catalog.refs());
+
+        String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
+        for (Map.Entry<String, String> entry : all.entrySet()) {
+            String text = quoteIfNeeded(entry.getKey());
+            if (text.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                builder.suggest(text, Component.literal(entry.getValue()));
+            }
+        }
+        return builder.buildFuture();
+    }
+
+    /** Whether {@code s} parses as a Brigadier unquoted string (so it needs no surrounding quotes). */
+    private static boolean unquotedSafe(String s) {
+        if (s.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            boolean ok = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+                    || c == '_' || c == '-' || c == '.' || c == '+';
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Wraps {@code s} in quotes (escaping {@code \} and {@code "}) when it isn't unquoted-safe (e.g. {@code HEAD~1}, {@code origin/main}). */
+    private static String quoteIfNeeded(String s) {
+        if (unquotedSafe(s)) {
+            return s;
+        }
+        return '"' + s.replace("\\", "\\\\").replace("\"", "\\\"") + '"';
     }
 
     // ---- helpers ------------------------------------------------------------------------------

@@ -66,12 +66,37 @@ class MineGitCommandsTest {
         public int rescan(CommandContext<CommandSourceStack> ctx) {
             return 1;
         }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestRefs(
+                CommandContext<CommandSourceStack> ctx,
+                com.mojang.brigadier.suggestion.SuggestionsBuilder builder) {
+            return com.mojang.brigadier.suggestion.Suggestions.empty();
+        }
     };
 
     private CommandDispatcher<CommandSourceStack> registered() {
         CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<CommandSourceStack>();
         MineGitCommands.register(dispatcher, NOOP);
         return dispatcher;
+    }
+
+    @Test
+    void checkoutAndDiffRefArgumentsCarryRefSuggestions() {
+        CommandNode<CommandSourceStack> root = registered().getRoot().getChild("minegit");
+        CommandNode<CommandSourceStack> ref = root.getChild("checkout").getChild("ref");
+        assertTrue(ref instanceof com.mojang.brigadier.tree.ArgumentCommandNode);
+        assertNotNull(
+                ((com.mojang.brigadier.tree.ArgumentCommandNode<CommandSourceStack, ?>) ref).getCustomSuggestions(),
+                "checkout <ref> should carry a ref suggestion provider");
+        CommandNode<CommandSourceStack> refA = root.getChild("diff").getChild("refA");
+        assertNotNull(
+                ((com.mojang.brigadier.tree.ArgumentCommandNode<CommandSourceStack, ?>) refA).getCustomSuggestions(),
+                "diff <refA> should carry a ref suggestion provider");
+        CommandNode<CommandSourceStack> refB = refA.getChild("refB");
+        assertNotNull(
+                ((com.mojang.brigadier.tree.ArgumentCommandNode<CommandSourceStack, ?>) refB).getCustomSuggestions(),
+                "diff <refB> should carry a ref suggestion provider");
     }
 
     @Test

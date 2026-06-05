@@ -115,6 +115,9 @@ class CheckoutServiceTest {
     void appliesAreThrottledAcrossMultipleServerThreadTasks() {
         FakeWorldAdapter world = new FakeWorldAdapter();
         try (MineGitRepo repo = MineGitRepo.init(repoDir, world, clock)) {
+            // A baseline block in a far chunk so "base" is a real (non-root) commit with a world
+            // snapshot — checking it back out is a normal revert, not the empty-root footgun.
+            world.setBlock(DimensionId.OVERWORLD, -100, 64, 0, stone);
             repo.commit("base", steve);
             // Three distinct chunks gain a block in commit B.
             world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, stone);

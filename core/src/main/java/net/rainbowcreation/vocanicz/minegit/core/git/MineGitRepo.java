@@ -303,6 +303,30 @@ public final class MineGitRepo implements Closeable {
         }
     }
 
+    /** Whether {@code rev} resolves to an object in this repo (a real commit/ref), vs. nothing. */
+    private boolean resolves(String rev) {
+        try {
+            return repository.resolve(rev) != null;
+        } catch (IOException e) {
+            throw new UncheckedIOException("failed to resolve " + rev, e);
+        }
+    }
+
+    /** Whether {@code rev} resolves to a root commit (no parents) — i.e. the repo's initial commit. */
+    private boolean isRootCommit(String rev) {
+        try {
+            ObjectId id = repository.resolve(rev);
+            if (id == null) {
+                return false;
+            }
+            try (RevWalk walk = new RevWalk(repository)) {
+                return walk.parseCommit(id).getParentCount() == 0;
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("failed to inspect " + rev, e);
+        }
+    }
+
     /**
      * Lists every chunk present in the tree of revision {@code rev} by walking it for {@code .mgc}
      * blobs and recovering each {@code (dimension, pos)} from its MGRF path. Returns an empty set if
@@ -451,6 +475,17 @@ public final class MineGitRepo implements Closeable {
      */
     public WorldDiff planCheckout(String target, boolean force, boolean dirtyScoped) {
         Objects.requireNonNull(target, "target");
+        // Refuse a checkout of the empty initial repository state — the metadata-only ROOT commit
+        // (no parent) that carries no world snapshot. Checking it out computes "remove every chunk" and
+        // would silently empty the world. Scoped to the root so a deliberately-empty later commit
+        // (revert-to-empty) is still allowed. Only guard a ref that resolves, so an unknown ref still
+        // surfaces as UnknownRefException via diffRefs. Stands even with force (force overrides the
+        // dirty-guard, not the empty-the-world trap).
+        if (resolves(target) && isRootCommit(target) && listChunks(target).isEmpty()) {
+            throw new EmptyTargetCheckoutException(
+                "'" + target + "' is the empty initial repository state (no world snapshot) — "
+                    + "nothing to check out");
+        }
         if (!force) {
             WorldDiff dirty = dirtyScoped
                 ? WorldDiffer.diffWorkingTreeDirty(this, adapter)

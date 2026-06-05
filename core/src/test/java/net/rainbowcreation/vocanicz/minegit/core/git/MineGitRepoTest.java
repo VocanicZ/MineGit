@@ -365,6 +365,27 @@ class MineGitRepoTest {
     }
 
     @Test
+    void planCheckout_refusesAChunklessTarget_evenWithForce(@TempDir Path dir) throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            // init() makes the metadata-only root commit (no chunks); the world commit is its child.
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, stone);
+            repo.commit("world", "Steve");
+
+            // The root (HEAD~1) carries no .mgc chunks — checking it out would empty the world.
+            assertThrows(
+                    EmptyTargetCheckoutException.class,
+                    () -> repo.planCheckout("HEAD~1", false, false),
+                    "a chunk-less target is refused");
+            assertThrows(
+                    EmptyTargetCheckoutException.class,
+                    () -> repo.planCheckout("HEAD~1", true, false),
+                    "force overrides the dirty-guard, not the empty-the-world guard");
+        }
+    }
+
+    @Test
     void finishCheckout_movesRefToTarget(@TempDir Path dir) throws Exception {
         FakeWorldAdapter world = new FakeWorldAdapter();
         try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
