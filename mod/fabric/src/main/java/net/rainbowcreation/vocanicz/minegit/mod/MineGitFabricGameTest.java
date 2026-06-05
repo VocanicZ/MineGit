@@ -36,4 +36,9 @@ public final class MineGitFabricGameTest {
     public void diffPayloadRoundTripsToClientHandler(GameTestHelper helper) {
         MineGitGameTestLogic.diffPayloadRoundTripsToClientHandler(helper);
     }
+
+    @GameTest(maxTicks = 200)
+    public void diffServerSendFramesReachCapturedSink(GameTestHelper helper) {
+        MineGitGameTestLogic.diffServerSendFramesReachCapturedSink(helper);
+    }
 }
