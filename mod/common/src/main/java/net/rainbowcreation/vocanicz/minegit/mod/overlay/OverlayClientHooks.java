@@ -5,6 +5,7 @@ import org.lwjgl.glfw.GLFW;
 import dev.architectury.event.events.client.ClientGuiEvent;
 import dev.architectury.event.events.client.ClientPlayerEvent;
 import dev.architectury.event.events.client.ClientTickEvent;
+import dev.architectury.platform.Platform;
 import dev.architectury.registry.client.keymappings.KeyMappingRegistry;
 
 import net.fabricmc.api.EnvType;
@@ -30,10 +31,10 @@ import net.rainbowcreation.vocanicz.minegit.mod.world.DimensionMapping;
 public final class OverlayClientHooks {
 
     /**
-     * The active client config. Spec defaults for this batch; issue #6 loads the on-disk file and
-     * replaces this. The keybind/HUD/render all read it.
+     * The active client config. Defaults until {@link #init} reads the on-disk file (issue #81);
+     * the keybind/HUD/render all read it through {@link #config()} so a reload would be picked up.
      */
-    private static final OverlayConfig CONFIG = OverlayConfig.defaults();
+    private static volatile OverlayConfig config = OverlayConfig.defaults();
 
     /** Monotonic client tick, the {@code receivedAt}/expiry clock for {@link OverlayClientState}. */
     private static volatile long clientTick;
@@ -45,7 +46,7 @@ public final class OverlayClientHooks {
 
     /** The active client overlay config. */
     public static OverlayConfig config() {
-        return CONFIG;
+        return config;
     }
 
     /** The current client tick — the world-render hook stamps expiry decisions against it. */
@@ -55,6 +56,10 @@ public final class OverlayClientHooks {
 
     /** Wires the receive sink, keybind, HUD, lifecycle tick, disconnect, and world-render hook. */
     public static void init() {
+        // Config: read the on-disk file once on init (writing a default template if absent), so the
+        // tunables (notably renderCap + autoExpireSeconds) actually change overlay behavior.
+        config = OverlayConfigFile.load(Platform.getConfigFolder().resolve(OverlayConfigFile.FILE_NAME));
+
         // Receive: each reassembled-frame's bytes build/replace the held overlay, stamped with the
         // current tick (the expiry baseline). The per-loader receiver funnels here via DiffChannel.
         DiffChannel.setClientHandler(bytes -> OverlayClientState.CLIENT.acceptFrame(bytes, clientTick));
@@ -72,7 +77,7 @@ public final class OverlayClientHooks {
         ClientPlayerEvent.CLIENT_PLAYER_QUIT.register(player -> OverlayClientState.CLIENT.onDisconnect());
 
         // HUD: +N -M ~K (+J more).
-        ClientGuiEvent.RENDER_HUD.register((graphics, delta) -> OverlayHud.render(graphics, CONFIG));
+        ClientGuiEvent.RENDER_HUD.register((graphics, delta) -> OverlayHud.render(graphics, config));
 
         // World render (loader-specific seam): translucent boxes after the translucent pass.
         OverlayRenderHook.register();
@@ -92,6 +97,6 @@ public final class OverlayClientHooks {
             }
         }
 
-        OverlayClientState.CLIENT.tickExpiry(clientTick, CONFIG.lifetimeTicks());
+        OverlayClientState.CLIENT.tickExpiry(clientTick, config.lifetimeTicks());
     }
 }
