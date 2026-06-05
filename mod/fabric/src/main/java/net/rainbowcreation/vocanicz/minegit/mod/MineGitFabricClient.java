@@ -6,6 +6,7 @@ import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffChannel;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffRawPayload;
+import net.rainbowcreation.vocanicz.minegit.mod.overlay.OverlayClientHooks;
 
 /**
  * Fabric client-distribution entrypoint — declared under the {@code client} entrypoint in
@@ -23,5 +24,9 @@ public final class MineGitFabricClient implements ClientModInitializer {
     public void onInitializeClient() {
         ClientPlayNetworking.registerGlobalReceiver(
                 DiffRawPayload.TYPE, (payload, context) -> DiffChannel.deliverToClient(payload.bytes()));
+        // Install the overlay sink + keybind + HUD + lifecycle + world-render hook (issue #80). The
+        // receiver above funnels bytes to DiffChannel.deliverToClient, which the sink installed here
+        // turns into the held OverlayState.
+        OverlayClientHooks.init();
     }
 }
