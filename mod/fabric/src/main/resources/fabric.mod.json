@@ -9,6 +9,7 @@
   "environment": "*",
   "entrypoints": {
     "main": ["net.rainbowcreation.vocanicz.minegit.mod.MineGitFabric"],
+    "client": ["net.rainbowcreation.vocanicz.minegit.mod.MineGitFabricClient"],
     "fabric-gametest": ["net.rainbowcreation.vocanicz.minegit.mod.MineGitFabricGameTest"]
   },
   "mixins": ["minegit.mixins.json"],
