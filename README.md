@@ -34,10 +34,19 @@ with no separate server process.
 
 `checkout` is op-gated (permission level 2 on the mod / `minegit.admin` on the plugin).
 
+### Diff overlay (mod client)
+
+On the **mod**, `/mg diff` also streams the change set to your client, which draws it in-world as
+translucent boxes — **green = added, red = removed, yellow = changed** — with a `+N −M ~K` HUD and a
+toggle key (default **J**). The client reads `<configDir>/minegit-overlay.properties` for the keybind,
+render distance, box cap, auto-expire timeout, and HUD corner (a commented default template is written
+on first run). See [`docs/manual-smoke-test.md`](docs/manual-smoke-test.md) for the config keys and the
+manual visual-smoke checklist.
+
 ## Current scope
 
 Blocks-only, local repository per world/level. Deferred for later batches: GitHub push/pull, block
-entities (chests/signs NBT), biomes, unloaded-chunk capture, and the client-side diff overlay.
+entities (chests/signs NBT), biomes, and unloaded-chunk capture.
 
 ## Building
 
