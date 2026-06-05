@@ -140,6 +140,39 @@ class CheckoutServiceTest {
     }
 
     @Test
+    void dirtyScopedCheckoutSnapshotsOnlyTheDirtySetAndStillReverts() {
+        FakeWorldAdapter world = twoCommitWorld(); // clean: commit drained the dirty set
+        // peekDirty() is empty, so the dirty-scoped snapshot reads nothing and the guard is free.
+        RecordingExecutor serverThread = new RecordingExecutor();
+        CheckoutService service = new CheckoutService(serverThread, new RecordingExecutor(), 1);
+
+        AtomicReference<CheckoutService.Result> result = new AtomicReference<>();
+        service.checkout(repoDir, world, clock, "HEAD~1", false, true, result::set);
+
+        CheckoutService.Result r = result.get();
+        assertNotNull(r, "completion callback fired");
+        assertFalse(r.isError(), "dirty-scoped clean checkout succeeds");
+        assertSame(BlockState.AIR, world.getBlock(DimensionId.OVERWORLD, 100, 64, 0), "reverted B");
+        assertEquals(1, r.applied().getRemoved(), "the revert delta still comes from the git trees");
+    }
+
+    @Test
+    void dirtyScopedGuardRefusesWhenTheDirtySetHasAChange() {
+        FakeWorldAdapter world = twoCommitWorld();
+        world.setBlock(DimensionId.OVERWORLD, 200, 64, 0, glass); // marks its chunk dirty
+        CheckoutService service =
+                new CheckoutService(new RecordingExecutor(), new RecordingExecutor(), 16);
+
+        AtomicReference<CheckoutService.Result> blocked = new AtomicReference<>();
+        service.checkout(repoDir, world, clock, "HEAD~1", false, true, blocked::set);
+
+        assertTrue(blocked.get().isError(), "dirty-scoped guard refuses a tracked change");
+        assertTrue(blocked.get().error() instanceof WorkingTreeDirtyException);
+        assertEquals(dirt, world.getBlock(DimensionId.OVERWORLD, 100, 64, 0),
+                "refused checkout reverted nothing");
+    }
+
+    @Test
     void unknownRefIsReportedAsAnError() {
         FakeWorldAdapter world = twoCommitWorld();
         CheckoutService service =

@@ -291,6 +291,11 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         boolean force = MineGitCommands.isForce(ctx);
         WorldAdapter live = adapterFor(level);
         Path repoPath = registry.repoPath(levelKey);
+        DirtyChunkSet tracker = trackers.tracker(levelKey);
+        // When primed, the dirty set is a trustworthy record of changes since HEAD, so the guard only
+        // needs to inspect those chunks — a post-commit checkout skips the whole-world scan. When not
+        // primed (e.g. a fresh bind), fall back to the safe full scan.
+        boolean dirtyScoped = tracker.isPrimed();
         CheckoutService service = new CheckoutService(pump, background, CHUNKS_PER_TICK);
 
         ctx.getSource().sendSuccess(
@@ -298,12 +303,15 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
                 false);
         // Snapshot + dirty-guard reads hop to the server thread, the plan/ref move runs off-thread,
         // applies land back on the server thread (throttled), and completion messages the player there.
-        // On success, unprime the tracker: HEAD has moved, so the dirty set is relative to the old HEAD.
-        // The next commit/status must do a full reconciliation pass against the new baseline.
+        // On success the live world now equals the new HEAD, so prime the tracker: future checkouts are
+        // dirty-scoped (fast). We deliberately do NOT drain — apply() re-marks the touched chunks via
+        // the setBlockState mixin, but those now match HEAD so the next commit diff-and-skips them
+        // (over-marking is safe). Draining would risk dropping a block placed during the ref-move
+        // window (under-marking, the one unsafe case); priming-only preserves such concurrent edits.
         final String capturedLevelKey = levelKey;
-        service.checkout(repoPath, live, clock, target, force, result -> {
+        service.checkout(repoPath, live, clock, target, force, dirtyScoped, result -> {
             if (!result.isError()) {
-                trackers.tracker(capturedLevelKey).unprime();
+                tracker.prime();
             }
             reportCheckout(ctx.getSource(), capturedLevelKey, target, result);
         });

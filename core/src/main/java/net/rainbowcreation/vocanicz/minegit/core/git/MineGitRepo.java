@@ -434,9 +434,27 @@ public final class MineGitRepo implements Closeable {
      * @throws UnknownRefException if {@code target} resolves to nothing
      */
     public WorldDiff planCheckout(String target, boolean force) {
+        return planCheckout(target, force, false);
+    }
+
+    /**
+     * As {@link #planCheckout(String, boolean)}, but when {@code dirtyScoped} the dirty-guard only
+     * inspects the chunks the adapter reports as {@linkplain WorldAdapter#peekDirty() dirty} (via
+     * {@link WorldDiffer#diffWorkingTreeDirty}) rather than scanning the whole working tree. A frontend
+     * passes {@code true} only when its dirty tracker is <em>primed</em> — i.e. the dirty set is a
+     * trustworthy record of everything that changed since {@code HEAD} — so an empty dirty set proves
+     * the tree is clean without an O(loaded-chunks) scan. With {@code dirtyScoped == false} this is the
+     * full-scan guard, identical to {@link #planCheckout(String, boolean)}.
+     *
+     * @throws WorkingTreeDirtyException if {@code !force} and the (scoped or full) working tree is dirty
+     * @throws UnknownRefException if {@code target} resolves to nothing
+     */
+    public WorldDiff planCheckout(String target, boolean force, boolean dirtyScoped) {
         Objects.requireNonNull(target, "target");
         if (!force) {
-            WorldDiff dirty = WorldDiffer.diffWorkingTree(this, adapter);
+            WorldDiff dirty = dirtyScoped
+                ? WorldDiffer.diffWorkingTreeDirty(this, adapter)
+                : WorldDiffer.diffWorkingTree(this, adapter);
             if (!dirty.getDimensions().isEmpty()) {
                 throw new WorkingTreeDirtyException(
                     "working tree has uncommitted changes (" + dirty + "); "

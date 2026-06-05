@@ -165,8 +165,9 @@ public final class MineGitGameTestLogic {
         require(commit(adapter, repo, "B", dirty) != null, "incremental commit B should snapshot the one dirty chunk");
         helper.assertBlockPresent(Blocks.DIAMOND_BLOCK, one);
 
-        // Checkout the priming commit: the one block reverts to gold (and the rest stay gold).
-        CheckoutService.Result result = checkout(adapter, repo, "HEAD~1", false);
+        // Checkout the priming commit via the dirty-scoped guard: the tracker is primed and the dirty
+        // set was drained by commit B, so the guard reads nothing yet still reverts the one block.
+        CheckoutService.Result result = checkout(adapter, repo, "HEAD~1", false, true);
         require(!result.isError(), "checkout HEAD~1 should succeed on a clean world");
         assertAll(helper, Blocks.GOLD_BLOCK);
 
@@ -277,9 +278,14 @@ public final class MineGitGameTestLogic {
 
     private static CheckoutService.Result checkout(
             WorldAdapter adapter, Path repo, String target, boolean force) {
+        return checkout(adapter, repo, target, force, false);
+    }
+
+    private static CheckoutService.Result checkout(
+            WorldAdapter adapter, Path repo, String target, boolean force, boolean dirtyScoped) {
         AtomicReference<CheckoutService.Result> out = new AtomicReference<CheckoutService.Result>();
         new CheckoutService(INLINE, INLINE, CHUNKS_PER_TICK)
-                .checkout(repo, adapter, CLOCK, target, force, out::set);
+                .checkout(repo, adapter, CLOCK, target, force, dirtyScoped, out::set);
         CheckoutService.Result result = out.get();
         if (result == null) {
             throw new IllegalStateException("checkout '" + target + "' never completed");

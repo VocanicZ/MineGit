@@ -317,6 +317,54 @@ class MineGitRepoTest {
     }
 
     @Test
+    void planCheckout_dirtyScoped_refusesWhenDirtySetHasAChange(@TempDir Path dir) throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        BlockState dirt = new BlockState("minecraft:dirt");
+        BlockState glass = new BlockState("minecraft:glass");
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, stone);
+            repo.commit("A", "Steve");
+            world.setBlock(DimensionId.OVERWORLD, 100, 64, 0, dirt);
+            repo.commit("B", "Steve");
+            world.drainDirty(); // clean baseline: dirty set empty, world == HEAD
+
+            world.setBlock(DimensionId.OVERWORLD, 200, 64, 0, glass); // tracked uncommitted edit
+            assertThrows(
+                    WorkingTreeDirtyException.class,
+                    () -> repo.planCheckout("HEAD~1", false, true),
+                    "dirty-scoped guard refuses a change that IS in the dirty set");
+        }
+    }
+
+    @Test
+    void planCheckout_dirtyScoped_ignoresChangesNotInTheDirtySet(@TempDir Path dir) throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        BlockState dirt = new BlockState("minecraft:dirt");
+        BlockState glass = new BlockState("minecraft:glass");
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, stone);
+            repo.commit("A", "Steve");
+            world.setBlock(DimensionId.OVERWORLD, 100, 64, 0, dirt);
+            repo.commit("B", "Steve");
+            world.drainDirty();
+
+            // An uncommitted edit the tracker never recorded (drained away). The dirty-scoped guard
+            // trusts the dirty set, so it sees a clean tree and plans the revert; the full guard refuses.
+            world.setBlock(DimensionId.OVERWORLD, 200, 64, 0, glass);
+            world.drainDirty();
+
+            WorldDiff scoped = repo.planCheckout("HEAD~1", false, true);
+            assertEquals(1, scoped.getRemoved(), "scoped guard treats the tree as clean and plans B->A");
+            assertThrows(
+                    WorkingTreeDirtyException.class,
+                    () -> repo.planCheckout("HEAD~1", false, false),
+                    "the full guard still sees the untracked change");
+        }
+    }
+
+    @Test
     void finishCheckout_movesRefToTarget(@TempDir Path dir) throws Exception {
         FakeWorldAdapter world = new FakeWorldAdapter();
         try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {

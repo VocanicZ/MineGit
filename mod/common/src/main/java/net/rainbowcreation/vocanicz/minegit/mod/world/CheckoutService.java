@@ -100,9 +100,9 @@ public final class CheckoutService {
     }
 
     /**
-     * Reverts {@code live} to {@code target}, refusing a dirty world unless {@code force}. The repo at
-     * {@code repoPath} is the source of truth; {@code onComplete} is invoked on the server thread with
-     * the {@link Result}.
+     * Reverts {@code live} to {@code target}, refusing a dirty world unless {@code force}, using the
+     * full-scan dirty-guard. The repo at {@code repoPath} is the source of truth; {@code onComplete} is
+     * invoked on the server thread with the {@link Result}.
      */
     public void checkout(
             Path repoPath,
@@ -111,12 +111,33 @@ public final class CheckoutService {
             String target,
             boolean force,
             Consumer<Result> onComplete) {
+        checkout(repoPath, live, clock, target, force, false, onComplete);
+    }
+
+    /**
+     * As {@link #checkout(Path, WorldAdapter, Clock, String, boolean, Consumer)}, but when
+     * {@code dirtyScoped} the dirty-guard inspects only the chunks {@code live} reports as
+     * {@linkplain WorldAdapter#peekDirty() dirty} — both the server-thread snapshot and the guard diff
+     * are scoped to that set instead of the whole loaded-chunk set. Callers pass {@code true} only when
+     * their dirty tracker is primed (the dirty set is a trustworthy record of changes since HEAD), so a
+     * post-commit checkout skips the O(loaded-chunks) scan entirely (issue from the tick-freeze
+     * follow-up).
+     */
+    public void checkout(
+            Path repoPath,
+            WorldAdapter live,
+            Clock clock,
+            String target,
+            boolean force,
+            boolean dirtyScoped,
+            Consumer<Result> onComplete) {
         Objects.requireNonNull(repoPath, "repoPath");
         Objects.requireNonNull(live, "live");
         Objects.requireNonNull(clock, "clock");
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(onComplete, "onComplete");
-        serverThread.execute(() -> snapshotBegin(repoPath, live, clock, target, force, onComplete));
+        serverThread.execute(() ->
+                snapshotBegin(repoPath, live, clock, target, force, dirtyScoped, onComplete));
     }
 
     // ---- 1. snapshot (server thread, throttled) -----------------------------------------------
@@ -127,11 +148,15 @@ public final class CheckoutService {
             Clock clock,
             String target,
             boolean force,
+            boolean dirtyScoped,
             Consumer<Result> onComplete) {
-        List<ChunkRef> refs = new ArrayList<ChunkRef>(live.allChunks());
+        // Dirty-scoped: only the dirty chunks can differ from HEAD, so snapshot just those — an empty
+        // dirty set means nothing to read and the guard proves the tree clean for free.
+        List<ChunkRef> refs = new ArrayList<ChunkRef>(
+                dirtyScoped ? live.peekDirty() : live.allChunks());
         Set<DimensionId> dims = live.dimensions();
         Map<ChunkRef, NormalizedChunk> captured = new HashMap<ChunkRef, NormalizedChunk>();
-        snapshotBatch(refs, 0, captured, dims, repoPath, live, clock, target, force, onComplete);
+        snapshotBatch(refs, 0, captured, dims, repoPath, live, clock, target, force, dirtyScoped, onComplete);
     }
 
     private void snapshotBatch(
@@ -144,6 +169,7 @@ public final class CheckoutService {
             Clock clock,
             String target,
             boolean force,
+            boolean dirtyScoped,
             Consumer<Result> onComplete) {
         int end = Math.min(index + chunksPerTick, refs.size());
         for (int i = index; i < end; i++) {
@@ -152,11 +178,12 @@ public final class CheckoutService {
         }
         if (end < refs.size()) {
             serverThread.execute(() -> snapshotBatch(
-                    refs, end, captured, dims, repoPath, live, clock, target, force, onComplete));
+                    refs, end, captured, dims, repoPath, live, clock, target, force, dirtyScoped, onComplete));
             return;
         }
         SnapshotWorldAdapter snapshot = new SnapshotWorldAdapter(dims, captured);
-        background.execute(() -> plan(snapshot, repoPath, live, clock, target, force, onComplete));
+        background.execute(() ->
+                plan(snapshot, repoPath, live, clock, target, force, dirtyScoped, onComplete));
     }
 
     // ---- 2. plan (background: dirty-guard + HEAD -> target diff) -------------------------------
@@ -168,10 +195,11 @@ public final class CheckoutService {
             Clock clock,
             String target,
             boolean force,
+            boolean dirtyScoped,
             Consumer<Result> onComplete) {
         WorldDiff planned;
         try (MineGitRepo repo = MineGitRepo.open(repoPath, snapshot, clock)) {
-            planned = repo.planCheckout(target, force);
+            planned = repo.planCheckout(target, force, dirtyScoped);
         } catch (RuntimeException e) {
             serverThread.execute(() -> onComplete.accept(Result.error(e)));
             return;
