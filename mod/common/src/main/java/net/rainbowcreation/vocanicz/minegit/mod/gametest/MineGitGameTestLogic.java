@@ -7,10 +7,14 @@ import net.rainbowcreation.vocanicz.minegit.core.git.Author;
 import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
 import net.rainbowcreation.vocanicz.minegit.core.model.ChunkPos;
 import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
+import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
 import net.rainbowcreation.vocanicz.minegit.mod.command.MineGitService;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffChannel;
+import net.rainbowcreation.vocanicz.minegit.mod.net.DiffOverlaySender;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffRawPayload;
+import net.rainbowcreation.vocanicz.minegit.protocol.DiffPayload;
 import net.rainbowcreation.vocanicz.minegit.protocol.Frame;
+import net.rainbowcreation.vocanicz.minegit.protocol.Reassembler;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CommitService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTracking;
@@ -258,6 +262,86 @@ public final class MineGitGameTestLogic {
             DiffChannel.resetClientHandler();
         }
         helper.succeed();
+    }
+
+    /**
+     * Proves the {@code /mg diff} server-send path (issue #78) on a dedicated server, without a live
+     * client: drives the {@link DiffOverlaySender} send entrypoint through a <em>captured-sink</em>
+     * {@link DiffOverlaySender.Sink} (records instead of transmitting) and asserts (a) a capable
+     * player gets the full framed payload, which reassembles + {@link DiffPayload#decode}s back to the
+     * source {@link WorldDiff}, and (b) a {@code canSend=false} player is silently skipped — no packet.
+     * This exercises the real {@code encode → frame → toBytes} path the {@code @ExpectPlatform}
+     * transmit rides on both loaders, even though the GPU draw is not auto-testable.
+     */
+    public static void diffServerSendFramesReachCapturedSink(GameTestHelper helper) {
+        WorldDiff source = sampleServerDiff();
+
+        // (a) Capable player: every frame must be captured and reassemble back to the source diff.
+        CapturingSink capable = new CapturingSink(true);
+        int frames = DiffOverlaySender.send(null, source, "HEAD", "WORKING", capable);
+        require(frames >= 1, "a capable player must receive at least one frame, got " + frames);
+        require(capable.sent.size() == frames, "every framed packet must be enqueued to the sink");
+
+        Reassembler reassembler = new Reassembler();
+        byte[] full = null;
+        for (byte[] frameBytes : capable.sent) {
+            java.util.Optional<byte[]> done = reassembler.add(Frame.fromBytes(frameBytes));
+            if (done.isPresent()) {
+                full = done.get();
+            }
+        }
+        require(full != null, "the captured frames must reassemble to a complete payload");
+        require(source.equals(DiffPayload.decode(full)),
+                "the framed bytes must decode back to the source WorldDiff");
+
+        // (b) Incapable player: the canSend gate skips the send entirely — no packet enqueued.
+        CapturingSink incapable = new CapturingSink(false);
+        int skipped = DiffOverlaySender.send(null, source, "HEAD", "WORKING", incapable);
+        require(skipped == 0, "a canSend=false player triggers no send, got " + skipped);
+        require(incapable.sent.isEmpty(), "no packet may be enqueued for an incapable player");
+
+        helper.succeed();
+    }
+
+    /** A small representative diff (one chunk, all three kinds) for the server-send GameTest. */
+    private static WorldDiff sampleServerDiff() {
+        java.util.List<net.rainbowcreation.vocanicz.minegit.core.model.BlockChange> changes =
+                new java.util.ArrayList<>();
+        changes.add(net.rainbowcreation.vocanicz.minegit.core.model.BlockChange.add(
+                3, 70, 5, new net.rainbowcreation.vocanicz.minegit.core.model.BlockState("minecraft:gold_block")));
+        changes.add(net.rainbowcreation.vocanicz.minegit.core.model.BlockChange.remove(
+                7, 12, 9, new net.rainbowcreation.vocanicz.minegit.core.model.BlockState("minecraft:dirt")));
+        changes.add(net.rainbowcreation.vocanicz.minegit.core.model.BlockChange.change(
+                1, 64, 1,
+                new net.rainbowcreation.vocanicz.minegit.core.model.BlockState("minecraft:dirt"),
+                new net.rainbowcreation.vocanicz.minegit.core.model.BlockState("minecraft:diamond_block")));
+        net.rainbowcreation.vocanicz.minegit.core.model.ChunkDiff cd =
+                new net.rainbowcreation.vocanicz.minegit.core.model.ChunkDiff(
+                        new ChunkPos(0, 0), changes);
+        java.util.Map<DimensionId, java.util.List<net.rainbowcreation.vocanicz.minegit.core.model.ChunkDiff>> dims =
+                new java.util.HashMap<>();
+        dims.put(DimensionId.OVERWORLD, java.util.Arrays.asList(cd));
+        return new WorldDiff(dims, 1, 1, 1);
+    }
+
+    /** Captured network sink: records each frame's bytes instead of transmitting, gated by canSend. */
+    private static final class CapturingSink implements DiffOverlaySender.Sink {
+        private final boolean capable;
+        final java.util.List<byte[]> sent = new java.util.ArrayList<>();
+
+        CapturingSink(boolean capable) {
+            this.capable = capable;
+        }
+
+        @Override
+        public boolean canSend(net.minecraft.server.level.ServerPlayer player) {
+            return capable;
+        }
+
+        @Override
+        public void sendTo(net.minecraft.server.level.ServerPlayer player, byte[] frameBytes) {
+            sent.add(frameBytes);
+        }
     }
 
     // ---- helpers ------------------------------------------------------------------------------

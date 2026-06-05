@@ -55,6 +55,8 @@ public final class MineGitNeoForgeGameTest {
                 MineGitGameTestLogic::mixinFiresOnRealBlockChange);
         registerTest(event, env, "diff_payload_round_trips_to_client_handler",
                 MineGitGameTestLogic::diffPayloadRoundTripsToClientHandler);
+        registerTest(event, env, "diff_server_send_frames_reach_captured_sink",
+                MineGitGameTestLogic::diffServerSendFramesReachCapturedSink);
     }
 
     private static void registerTest(

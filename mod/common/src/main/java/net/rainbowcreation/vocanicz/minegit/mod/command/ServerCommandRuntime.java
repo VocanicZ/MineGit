@@ -6,6 +6,7 @@ import net.rainbowcreation.vocanicz.minegit.core.git.Author;
 import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
 import net.rainbowcreation.vocanicz.minegit.core.git.UnknownRefException;
 import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
+import net.rainbowcreation.vocanicz.minegit.mod.net.DiffOverlaySender;
 import net.rainbowcreation.vocanicz.minegit.mod.world.BackgroundExecutor;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CommitService;
@@ -267,13 +268,19 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         String refB = optionalArg(ctx, "refB");
         WorldDiff diff;
         String scope;
+        String fromRef;
+        String toRef;
         try {
             if (refA == null) {
                 diff = MineGitService.status(repoPath, adapter, clock, trackers.tracker(levelKey)); // working-vs-HEAD
                 scope = levelKey;
+                fromRef = "HEAD";
+                toRef = "WORKING";
             } else {
                 diff = MineGitService.diffRefs(repoPath, adapter, clock, refA, refB);
                 scope = refA + ".." + refB;
+                fromRef = refA;
+                toRef = refB;
             }
         } catch (UnknownRefException e) {
             // Surface unresolvable refs loudly (core #37) — never silently diff against an empty tree.
@@ -289,6 +296,9 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         for (Component line : MineGitText.diffBody(diff, MineGitText.DIFF_LINE_CAP)) {
             ctx.getSource().sendSuccess(() -> line, false);
         }
+        // ...and push the same diff as the in-world overlay to the requesting player. Gated on
+        // canSend: a player without the client mod is silently skipped; the chat diff above stands.
+        DiffOverlaySender.send(player, diff, fromRef, toRef);
         return 1;
     }
 
