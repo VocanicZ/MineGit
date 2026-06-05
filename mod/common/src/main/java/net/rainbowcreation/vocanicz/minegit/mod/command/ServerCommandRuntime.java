@@ -114,19 +114,34 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         Path repoPath = registry.repoPath(levelKey);
         MineGitService.init(repoPath, adapter, clock);
         registry.bind(levelKey); // mark bound only once the git repo actually exists
-        ctx.getSource().sendSuccess(
-                () -> MineGitText.good(
-                        "Initialized MineGit repo for level '" + levelKey + "' — snapshotting world…"),
-                false);
         // Capture the current world as the initial commit, so init is a real baseline you can check out
-        // to (rather than a chunk-less metadata commit that would empty the world). Throttled through
-        // the same tick pump as /mg commit, so a large world doesn't freeze the tick. The tracker is
+        // to (rather than a chunk-less metadata commit that would empty the world). The tracker is
         // unprimed here, so this does the full-world scan and primes it for incremental commits after.
         Author author = authorFor(player);
         DirtyChunkSet tracker = trackers.tracker(levelKey);
         CommitService service = new CommitService(pump, background, CHUNKS_PER_TICK);
-        service.commit(repoPath, adapter, clock, "Initial world snapshot", author, tracker,
-                result -> reportCommit(ctx.getSource(), levelKey, result));
+        boolean noFreeze = MineGitCommands.isNoFreeze(ctx);
+        if (noFreeze) {
+            // --nofreeze: spread the snapshot across ticks via the same tick pump as /mg commit, so a
+            // large world doesn't freeze the tick. Returns before the snapshot lands (Spec C batch 2 §4).
+            ctx.getSource().sendSuccess(
+                    () -> MineGitText.good(
+                            "Initialized MineGit repo for level '" + levelKey + "' — snapshotting world…"),
+                    false);
+            service.commit(repoPath, adapter, clock, "Initial world snapshot", author, tracker,
+                    result -> reportCommit(ctx.getSource(), levelKey, result));
+            return 1;
+        }
+        // Freeze-by-default: run the snapshot commit synchronously on the server thread, so the tick is
+        // frozen until the commit exists at repo HEAD, then resumes (Spec C batch 2 §4).
+        ctx.getSource().sendSuccess(
+                () -> MineGitText.good(
+                        "Initialized MineGit repo for level '" + levelKey
+                                + "' — Freezing server to snapshot world…"),
+                false);
+        CommitService.Result result =
+                service.commitBlocking(repoPath, adapter, clock, "Initial world snapshot", author, tracker);
+        reportCommit(ctx.getSource(), levelKey, result);
         return 1;
     }
 

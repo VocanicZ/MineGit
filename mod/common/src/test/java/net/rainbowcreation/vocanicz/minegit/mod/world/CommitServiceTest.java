@@ -46,6 +46,16 @@ class CommitServiceTest {
         }
     }
 
+    /** Queues tasks without ever running them — models a tick pump that is never pumped. */
+    private static final class DeferringExecutor implements Executor {
+        final java.util.ArrayDeque<Runnable> queue = new java.util.ArrayDeque<Runnable>();
+
+        @Override
+        public void execute(Runnable command) {
+            queue.add(command);
+        }
+    }
+
     private final Clock clock = Clock.fixed(Instant.ofEpochSecond(1780576496L), ZoneOffset.UTC);
 
     private MineGitRepo initRepo(FakeWorldAdapter world) {
@@ -128,6 +138,38 @@ class CommitServiceTest {
         CommitService.Result r = result.get();
         assertFalse(r.isError());
         assertNull(r.commit(), "no delta => no commit");
+    }
+
+    @Test
+    void pumpedCommitDefersButBlockingCompletesBeforeReturning() {
+        // The freezing /mg init path (Spec C batch 2 §4): commitBlocking must land the snapshot at
+        // repo HEAD before it returns, while the pumped commit only lands once its executors drain.
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        initRepo(world).close(); // empty baseline
+        world.setBlock(DimensionId.OVERWORLD, 1, 64, 2, new BlockState("minecraft:stone"));
+
+        // Pumped path: deferring executors never run => no commit lands.
+        DeferringExecutor serverThread = new DeferringExecutor();
+        DeferringExecutor background = new DeferringExecutor();
+        CommitService service = new CommitService(serverThread, background, 16);
+        service.commit(repoDir, world, clock, "pumped",
+                new Author("Steve", "steve@players.minegit.local"), null, r -> { });
+        assertFalse(serverThread.queue.isEmpty(), "pumped work is queued, not run");
+        try (MineGitRepo repo = MineGitRepo.open(repoDir, world, clock)) {
+            assertEquals(1, repo.log().size(), "pumped commit must NOT have landed yet (deferred)");
+        }
+
+        // Blocking path: completes on the calling thread before returning, ignoring the deferring executors.
+        CommitService.Result r = service.commitBlocking(repoDir, world, clock, "frozen",
+                new Author("Steve", "steve@players.minegit.local"), null);
+        assertNotNull(r, "blocking returns a result");
+        assertFalse(r.isError(), "blocking commit succeeded");
+        assertNotNull(r.commit(), "blocking produced a commit before returning");
+        assertEquals("frozen", r.commit().getMessage());
+        try (MineGitRepo repo = MineGitRepo.open(repoDir, world, clock)) {
+            assertEquals("frozen", repo.log().get(0).getMessage(),
+                    "the frozen commit is at repo HEAD before commitBlocking returned");
+        }
     }
 
     @Test

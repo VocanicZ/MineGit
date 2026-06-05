@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
@@ -116,6 +117,33 @@ public final class CommitService {
         Objects.requireNonNull(author, "author");
         Objects.requireNonNull(onComplete, "onComplete");
         serverThread.execute(() -> snapshotBegin(repoPath, live, clock, message, author, tracker, onComplete));
+    }
+
+    /**
+     * The <strong>freezing</strong> sibling of {@link #commit}: runs the whole snapshot → git dance to
+     * completion on the <em>calling</em> thread and returns the {@link Result}, ignoring the injected
+     * throttling executors. The tick is blocked until the snapshot commit exists at repo HEAD, so the
+     * commit is durable before this returns — the freeze-by-default path behind {@code /mg init} (Spec
+     * C batch 2 §4). Contrast {@link #commit}, which spreads the same work across ticks via the
+     * injected executors and only lands once they drain.
+     *
+     * @param tracker the per-level dirty set, or {@code null} to always do a full scan
+     * @return the commit outcome, fully resolved on the calling thread
+     */
+    public Result commitBlocking(
+            Path repoPath,
+            WorldAdapter live,
+            Clock clock,
+            String message,
+            Author author,
+            DirtyChunkSet tracker) {
+        AtomicReference<Result> out = new AtomicReference<Result>();
+        // Inline executors run every hop synchronously on this thread, so by the time commit() returns
+        // the whole dance (read → git → completion) has finished and out holds the Result.
+        Executor inline = Runnable::run;
+        new CommitService(inline, inline, chunksPerTick)
+                .commit(repoPath, live, clock, message, author, tracker, out::set);
+        return out.get();
     }
 
     private void snapshotBegin(

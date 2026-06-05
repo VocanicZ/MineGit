@@ -213,6 +213,44 @@ class MineGitCommandsTest {
     }
 
     @Test
+    void initIsExecutableBareAndAcceptsAnOptionalNoFreezeFlag() {
+        CommandNode<CommandSourceStack> init =
+                registered().getRoot().getChild("minegit").getChild("init");
+        assertNotNull(init, "/minegit init should be registered");
+        // Bare `/mg init` is runnable (freeze-by-default)…
+        assertNotNull(init.getCommand(), "bare /mg init should execute (freeze)");
+        // …and `/mg init --nofreeze` nests the flag and is also executable (pumped).
+        CommandNode<CommandSourceStack> nofreeze = init.getChild("--nofreeze");
+        assertNotNull(nofreeze, "/mg init should accept --nofreeze");
+        assertNotNull(nofreeze.getCommand(), "/mg init --nofreeze should execute");
+    }
+
+    @Test
+    void isNoFreezeIsTrueOnlyWhenTheFlagIsPresent() {
+        assertFalse(MineGitCommands.isNoFreeze(parseInit("")));
+        assertTrue(MineGitCommands.isNoFreeze(parseInit("--nofreeze")));
+    }
+
+    /**
+     * A requirement-free mirror of the init {@code --nofreeze} flag shape, so {@link
+     * MineGitCommands#isNoFreeze} can be exercised on a real Brigadier context without a
+     * permission-bearing {@code CommandSourceStack}. The {@code --nofreeze} literal matches {@link
+     * MineGitCommands#NOFREEZE_FLAG}.
+     */
+    private static CommandContext<CommandSourceStack> parseInit(String tail) {
+        CommandDispatcher<CommandSourceStack> dispatcher =
+                new CommandDispatcher<CommandSourceStack>();
+        dispatcher.register(com.mojang.brigadier.builder.LiteralArgumentBuilder
+                .<CommandSourceStack>literal("t")
+                .executes(c -> 1)
+                .then(com.mojang.brigadier.builder.LiteralArgumentBuilder
+                        .<CommandSourceStack>literal("--nofreeze")
+                        .executes(c -> 1)));
+        String input = tail.isEmpty() ? "t" : "t " + tail;
+        return dispatcher.parse(input, (CommandSourceStack) null).getContext().build(input);
+    }
+
+    @Test
     void isFullIsTrueOnlyWhenTheFlagIsPresent() {
         assertFalse(MineGitCommands.isFull(parseCommit("")));
         assertTrue(MineGitCommands.isFull(parseCommit("--full")));
