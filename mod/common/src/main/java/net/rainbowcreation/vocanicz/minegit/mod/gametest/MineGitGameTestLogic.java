@@ -8,6 +8,9 @@ import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
 import net.rainbowcreation.vocanicz.minegit.core.model.ChunkPos;
 import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
 import net.rainbowcreation.vocanicz.minegit.mod.command.MineGitService;
+import net.rainbowcreation.vocanicz.minegit.mod.net.DiffChannel;
+import net.rainbowcreation.vocanicz.minegit.mod.net.DiffRawPayload;
+import net.rainbowcreation.vocanicz.minegit.protocol.Frame;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CommitService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTracking;
@@ -25,7 +28,9 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
+import io.netty.buffer.Unpooled;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Blocks;
@@ -215,6 +220,43 @@ public final class MineGitGameTestLogic {
         require(peeked.contains(expected),
                 "the dirty set must contain the changed block's chunk " + expected + ", was " + peeked);
 
+        helper.succeed();
+    }
+
+    /**
+     * Proves the {@code minegit:diff} wire is open end to end on a dedicated server (issue #77),
+     * without a live client: a real {@link Frame} → {@code toBytes()} → {@link DiffRawPayload} →
+     * {@link DiffRawPayload#STREAM_CODEC} encode into a network buffer → decode back → the
+     * loader-agnostic {@link DiffChannel#deliverToClient} → an installed capture sink. The captured
+     * bytes must reconstruct the original {@link Frame} byte-for-byte. This exercises the actual packet
+     * codec the per-loader receiver uses, so a "hand-sent test packet round-trips bytes to the client
+     * handler" is asserted in CI on both loaders even though the GPU draw is not.
+     */
+    public static void diffPayloadRoundTripsToClientHandler(GameTestHelper helper) {
+        AtomicReference<byte[]> captured = new AtomicReference<>();
+        DiffChannel.setClientHandler(captured::set);
+        try {
+            Frame source = new Frame(0xC0FFEE, 1, 3, new byte[] {10, 20, 30, 40, 50});
+            byte[] wire = source.toBytes();
+
+            // Encode the opaque payload through the real StreamCodec, then decode a fresh copy back —
+            // exactly the path the client receiver decodes a received minegit:diff packet through.
+            FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+            DiffRawPayload.STREAM_CODEC.encode(buf, new DiffRawPayload(wire));
+            DiffRawPayload decoded = DiffRawPayload.STREAM_CODEC.decode(buf);
+
+            // Funnel the decoded opaque bytes to the client sink, as the @ExpectPlatform receiver does.
+            DiffChannel.deliverToClient(decoded.bytes());
+
+            byte[] seen = captured.get();
+            require(seen != null, "the client handler must receive the round-tripped minegit:diff bytes");
+            require(java.util.Arrays.equals(wire, seen),
+                    "the opaque payload must survive encode/decode byte-for-byte");
+            require(source.equals(Frame.fromBytes(seen)),
+                    "the delivered bytes must reconstruct the source Frame");
+        } finally {
+            DiffChannel.resetClientHandler();
+        }
         helper.succeed();
     }
 

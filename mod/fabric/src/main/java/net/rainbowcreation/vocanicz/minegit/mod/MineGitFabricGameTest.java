@@ -31,4 +31,9 @@ public final class MineGitFabricGameTest {
     public void mixinFiresOnRealBlockChange(GameTestHelper helper) {
         MineGitGameTestLogic.mixinFiresOnRealBlockChange(helper);
     }
+
+    @GameTest(maxTicks = 200)
+    public void diffPayloadRoundTripsToClientHandler(GameTestHelper helper) {
+        MineGitGameTestLogic.diffPayloadRoundTripsToClientHandler(helper);
+    }
 }

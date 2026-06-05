@@ -2,6 +2,7 @@ package net.rainbowcreation.vocanicz.minegit.mod.neoforge;
 
 import net.rainbowcreation.vocanicz.minegit.mod.MineGitInfo;
 import net.rainbowcreation.vocanicz.minegit.mod.MineGitMod;
+import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 
@@ -15,8 +16,15 @@ import net.neoforged.fml.common.Mod;
 @Mod(MineGitInfo.MOD_ID)
 public final class MineGitNeoForge {
 
-    public MineGitNeoForge(IEventBus modEventBus) {
+    public MineGitNeoForge(IEventBus modEventBus, Dist dist) {
         MineGitMod.init();
+        // Register the minegit:diff opaque-byte payload (type + S2C handler) on the mod bus (issue #77).
+        MineGitNeoForgeNetworking.register(modEventBus);
+        // Client-distribution init seam: only on the physical client, so the dedicated server never
+        // classloads client-only overlay types (issue #77).
+        if (dist.isClient()) {
+            MineGitNeoForgeClient.init(modEventBus);
+        }
         // GameTest registration (issue #64); the event only fires when GameTest is enabled.
         MineGitNeoForgeGameTest.register(modEventBus);
     }
