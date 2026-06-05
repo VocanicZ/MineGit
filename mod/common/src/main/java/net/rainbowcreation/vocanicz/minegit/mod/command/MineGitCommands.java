@@ -80,6 +80,9 @@ public final class MineGitCommands {
     /** The {@code /mg commit --full} flag literal that forces a full rescan (overrides incremental). */
     static final String FULL_FLAG = "--full";
 
+    /** The {@code /mg init --nofreeze} flag literal that routes init to the pumped (non-freezing) snapshot. */
+    static final String NOFREEZE_FLAG = "--nofreeze";
+
     /** Message used when {@code /mg commit} is run with no {@code -m} text. */
     public static final String DEFAULT_COMMIT_MESSAGE = "Update world";
 
@@ -129,6 +132,20 @@ public final class MineGitCommands {
         return false;
     }
 
+    /**
+     * Whether {@code /mg init --nofreeze} was typed: true iff the {@link #NOFREEZE_FLAG} literal node
+     * was matched on the parsed path. The bare {@code /mg init} freezes the tick and snapshots
+     * synchronously (Spec C batch 2 §4); the flag routes to the tick-pumped snapshot instead.
+     */
+    public static boolean isNoFreeze(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx) {
+        for (com.mojang.brigadier.context.ParsedCommandNode<CommandSourceStack> node : ctx.getNodes()) {
+            if (NOFREEZE_FLAG.equals(node.getNode().getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Registers {@code /minegit} (+ aliases) on {@code dispatcher}, delegating to {@code runtime}. */
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher, Runtime runtime) {
         String primary = MineGitInfo.commandAliases().get(0);
@@ -144,7 +161,7 @@ public final class MineGitCommands {
     static LiteralArgumentBuilder<CommandSourceStack> build(String literal, Runtime runtime) {
         return Commands.literal(literal)
                 .executes(MineGitCommands::usage)
-                .then(subcommand(Subcommand.INIT, runtime::init))
+                .then(initSubcommand(runtime))
                 .then(subcommand(Subcommand.STATUS, runtime::status))
                 .then(commitSubcommand(runtime))
                 .then(subcommand(Subcommand.LOG, runtime::log))
@@ -223,6 +240,20 @@ public final class MineGitCommands {
                                 .then(Commands.argument(MESSAGE_ARG,
                                         com.mojang.brigadier.arguments.StringArgumentType.greedyString())
                                         .executes(runtime::commit))));
+    }
+
+    /**
+     * The {@code init} literal: runnable bare ({@code /mg init} — freeze-by-default, the tick is
+     * frozen while the world snapshots synchronously) or as {@code /mg init --nofreeze} (route to the
+     * tick-pumped snapshot that spreads across ticks, Spec C batch 2 §4). Both forms dispatch to
+     * {@code runtime.init}; the runtime reads the flag via {@link #isNoFreeze}.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> initSubcommand(Runtime runtime) {
+        Command<CommandSourceStack> action = runtime::init;
+        return Commands.literal(Subcommand.INIT.literal())
+                .requires(Commands.hasPermission(permissionCheck(Subcommand.INIT.permissionLevel())))
+                .executes(action)
+                .then(Commands.literal(NOFREEZE_FLAG).executes(action));
     }
 
     /** A gated subcommand literal: {@code requires(hasPermission(level))} + the execution action. */
