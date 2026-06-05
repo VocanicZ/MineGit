@@ -365,6 +365,32 @@ class MineGitRepoTest {
     }
 
     @Test
+    void listKnownCommits_includesCommitsOrphanedByResetCheckout_andExcludesRoot(@TempDir Path dir)
+            throws Exception {
+        BlockState stone = new BlockState("minecraft:stone");
+        BlockState dirt = new BlockState("minecraft:dirt");
+        FakeWorldAdapter world = new FakeWorldAdapter();
+        try (MineGitRepo repo = MineGitRepo.init(dir, world, fixedClock(1000))) {
+            world.setBlock(DimensionId.OVERWORLD, 0, 64, 0, stone);
+            CommitInfo a = repo.commit("A", "Steve");
+            world.setBlock(DimensionId.OVERWORLD, 100, 64, 0, dirt);
+            CommitInfo b = repo.commit("B", "Steve"); // HEAD/master = B
+
+            // Reset-style checkout back to A orphans B (master moves to A, B unreachable from HEAD).
+            repo.finishCheckout("HEAD~1");
+            assertEquals("A", repo.log().get(0).getMessage(), "HEAD-reachable log no longer sees B");
+
+            java.util.List<String> known = new java.util.ArrayList<String>();
+            for (CommitInfo c : repo.listKnownCommits(50)) {
+                known.add(c.getId());
+            }
+            assertTrue(known.contains(a.getId()), "A is listed");
+            assertTrue(known.contains(b.getId()), "orphaned B is still listed (recoverable via reflog)");
+            assertEquals(2, known.size(), "only the two world commits — the metadata root is excluded");
+        }
+    }
+
+    @Test
     void planCheckout_refusesAChunklessTarget_evenWithForce(@TempDir Path dir) throws Exception {
         BlockState stone = new BlockState("minecraft:stone");
         FakeWorldAdapter world = new FakeWorldAdapter();

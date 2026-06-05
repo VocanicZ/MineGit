@@ -32,6 +32,7 @@ import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.PersonIdent;
+import org.eclipse.jgit.lib.ReflogEntry;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevSort;
@@ -244,6 +245,63 @@ public final class MineGitRepo implements Closeable {
             return out;
         } catch (IOException e) {
             throw new UncheckedIOException("log failed", e);
+        }
+    }
+
+    /**
+     * Checkout-able commits, newest first, capped at {@code limit}. Unlike {@link #log()} (only what is
+     * reachable from {@code HEAD}), this unions every ref's history with the {@code HEAD} reflog, so a
+     * commit <strong>orphaned</strong> by a reset-style {@link #finishCheckout} — checking out an older
+     * snapshot moves the current branch — is still listed and remains navigable. The metadata-only root
+     * commit (no parent, hence no world snapshot) is excluded, since {@link #planCheckout} refuses it.
+     * Drives {@code /mg checkout} / {@code /mg diff} tab-completion.
+     */
+    public List<CommitInfo> listKnownCommits(int limit) {
+        if (limit <= 0) {
+            return Collections.emptyList();
+        }
+        try {
+            List<CommitInfo> out = new ArrayList<CommitInfo>();
+            try (RevWalk walk = new RevWalk(repository)) {
+                walk.sort(RevSort.COMMIT_TIME_DESC);
+                for (Ref ref : repository.getRefDatabase().getRefs()) {
+                    markStartQuietly(walk, ref.getObjectId());
+                }
+                // The HEAD reflog records every commit HEAD has pointed at, including ones a
+                // reset-style checkout left unreachable — seed from both ends so they're recoverable.
+                try {
+                    for (ReflogEntry entry : git.reflog().call()) {
+                        markStartQuietly(walk, entry.getNewId());
+                        markStartQuietly(walk, entry.getOldId());
+                    }
+                } catch (GitAPIException noReflog) {
+                    // No reflog (or unreadable) — fall back to ref-reachable commits only.
+                }
+                for (RevCommit c : walk) {
+                    if (c.getParentCount() == 0) {
+                        continue; // metadata-only root: no world snapshot, never a checkout target
+                    }
+                    out.add(toCommitInfo(c));
+                    if (out.size() >= limit) {
+                        break;
+                    }
+                }
+            }
+            return out;
+        } catch (IOException e) {
+            throw new UncheckedIOException("listKnownCommits failed", e);
+        }
+    }
+
+    /** Marks {@code id}'s commit as a {@link RevWalk} start, skipping a null/non-commit/unreadable id. */
+    private static void markStartQuietly(RevWalk walk, ObjectId id) {
+        if (id == null) {
+            return;
+        }
+        try {
+            walk.markStart(walk.parseCommit(id));
+        } catch (IOException | RuntimeException skip) {
+            // a non-commit object or unreadable id — leave it out
         }
     }
 

@@ -107,49 +107,52 @@ public final class MineGitService {
 
     /**
      * The catalogue of checkout/diff ref candidates for {@code repoDir} in one repo open: branch names
-     * then the {@value #REF_SUGGEST_COMMIT_CAP} most recent commit short-hashes, each mapped to a short
-     * tooltip (branch kind / commit message), plus the total commit count so the caller can offer the
-     * matching {@code HEAD~N} aliases. Drives {@code /mg checkout}/{@code /mg diff} tab-completion.
+     * then the {@value #REF_SUGGEST_COMMIT_CAP} most recent <em>checkout-able</em> commit short-hashes
+     * ({@link MineGitRepo#listKnownCommits} — reflog-aware, so commits orphaned by a reset-style
+     * checkout still appear, and the empty root is excluded), each mapped to a short tooltip, plus the
+     * {@code HEAD}-reachable depth so the caller can offer the matching {@code HEAD~N} aliases. Drives
+     * {@code /mg checkout}/{@code /mg diff} tab-completion.
      */
     public static RefCatalog refCatalog(Path repoDir, WorldAdapter adapter, Clock clock) {
         Objects.requireNonNull(repoDir, "repoDir");
         Objects.requireNonNull(adapter, "adapter");
         Objects.requireNonNull(clock, "clock");
         LinkedHashMap<String, String> refs = new LinkedHashMap<String, String>();
-        int commitCount;
+        int headDepth;
         try (MineGitRepo repo = MineGitRepo.open(repoDir, adapter, clock)) {
             for (BranchRef branch : repo.branches()) {
                 refs.putIfAbsent(branch.getName(), branch.isRemote() ? "remote branch" : "branch");
             }
-            List<CommitInfo> log = repo.log();
-            commitCount = log.size();
-            int cap = Math.min(log.size(), REF_SUGGEST_COMMIT_CAP);
-            for (int i = 0; i < cap; i++) {
-                CommitInfo commit = log.get(i);
+            for (CommitInfo commit : repo.listKnownCommits(REF_SUGGEST_COMMIT_CAP)) {
                 refs.putIfAbsent(MineGitText.shortHash(commit.getId()), MineGitText.firstLine(commit.getMessage()));
             }
+            headDepth = repo.log().size();
         }
-        return new RefCatalog(refs, commitCount);
+        return new RefCatalog(refs, headDepth);
     }
 
-    /** Ref suggestions ({@code value -> tooltip}, insertion-ordered) plus the repo's commit count. */
+    /** Ref suggestions ({@code value -> tooltip}, insertion-ordered) plus the {@code HEAD}-reachable depth. */
     public static final class RefCatalog {
         private final Map<String, String> refs;
-        private final int commitCount;
+        private final int headCommitDepth;
 
-        RefCatalog(Map<String, String> refs, int commitCount) {
+        RefCatalog(Map<String, String> refs, int headCommitDepth) {
             this.refs = refs;
-            this.commitCount = commitCount;
+            this.headCommitDepth = headCommitDepth;
         }
 
-        /** Suggestable refs (branch names, then recent short-hashes) mapped to their tooltip text. */
+        /** Suggestable refs (branch names, then checkout-able short-hashes) mapped to their tooltip text. */
         public Map<String, String> refs() {
             return refs;
         }
 
-        /** Total number of commits in the repo (for offering {@code HEAD~N} aliases). */
-        public int commitCount() {
-            return commitCount;
+        /**
+         * Number of commits reachable from {@code HEAD} (including the metadata root). The deepest
+         * navigable {@code HEAD~N} is {@code headCommitDepth - 2} (one less for the current commit, one
+         * less because {@code HEAD~(depth-1)} is the empty root, which checkout refuses).
+         */
+        public int headCommitDepth() {
+            return headCommitDepth;
         }
     }
 }

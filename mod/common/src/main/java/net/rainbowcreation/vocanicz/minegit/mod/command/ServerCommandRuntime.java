@@ -390,10 +390,11 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
             return builder.buildFuture();
         }
 
-        // HEAD / HEAD~N aliases first, then branches + recent commit short-hashes from the catalogue.
+        // HEAD / HEAD~N aliases first, then branches + checkout-able short-hashes from the catalogue.
+        // Cap HEAD~N at depth-2 so we never offer HEAD~(depth-1) — the empty root, which checkout refuses.
         LinkedHashMap<String, String> all = new LinkedHashMap<String, String>();
         all.put("HEAD", "current commit");
-        int back = Math.min(catalog.commitCount() - 1, HEAD_ALIAS_CAP);
+        int back = Math.min(catalog.headCommitDepth() - 2, HEAD_ALIAS_CAP);
         for (int n = 1; n <= back; n++) {
             all.put("HEAD~" + n, n == 1 ? "1 commit back" : n + " commits back");
         }
