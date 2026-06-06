@@ -10,8 +10,11 @@ import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
 import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
 import net.rainbowcreation.vocanicz.minegit.mod.command.MineGitService;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffChannel;
+import net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlChannel;
+import net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlPayload;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffOverlaySender;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffRawPayload;
+import net.rainbowcreation.vocanicz.minegit.protocol.DiffControl;
 import net.rainbowcreation.vocanicz.minegit.protocol.DiffPayload;
 import net.rainbowcreation.vocanicz.minegit.protocol.Frame;
 import net.rainbowcreation.vocanicz.minegit.protocol.Reassembler;
@@ -260,6 +263,49 @@ public final class MineGitGameTestLogic {
                     "the delivered bytes must reconstruct the source Frame");
         } finally {
             DiffChannel.resetClientHandler();
+        }
+        helper.succeed();
+    }
+
+    /**
+     * Proves the {@code minegit:diffsub} control wire is open end to end on a dedicated server
+     * (issue #91), without a live client: a real {@link DiffControl} → {@code encode()} →
+     * {@link DiffControlPayload} → {@link DiffControlPayload#STREAM_CODEC} encode into a network buffer
+     * → decode back → the loader-agnostic {@link DiffControlChannel#deliverToServer} → an installed
+     * capture handler. The captured control must equal the source for both {@code SUBSCRIBE} and
+     * {@code UNSUBSCRIBE}, and a malformed payload must be dropped (never dispatched). This exercises
+     * the actual packet codec the per-loader server receiver uses, so a "hand-sent SUB/UNSUB reaches
+     * the server handler" is asserted in CI on both loaders.
+     */
+    public static void controlPacketRoundTripsToServerHandler(GameTestHelper helper) {
+        AtomicReference<DiffControl> captured = new AtomicReference<>();
+        DiffControlChannel.setServerHandler((player, control) -> captured.set(control));
+        try {
+            for (DiffControl source : DiffControl.values()) {
+                captured.set(null);
+
+                // Encode the opaque control payload through the real StreamCodec, then decode a fresh
+                // copy back — exactly the path the server receiver decodes a received diffsub packet.
+                FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+                DiffControlPayload.STREAM_CODEC.encode(buf, new DiffControlPayload(source.encode()));
+                DiffControlPayload decoded = DiffControlPayload.STREAM_CODEC.decode(buf);
+
+                // Funnel the decoded bytes to the server handler, as the @ExpectPlatform receiver does.
+                DiffControlChannel.deliverToServer(null, decoded.bytes());
+
+                require(captured.get() == source,
+                        "the server handler must receive the round-tripped control " + source
+                                + ", was " + captured.get());
+            }
+
+            // A malformed control byte must be dropped by deliverToServer, not dispatched.
+            captured.set(null);
+            FriendlyByteBuf junk = new FriendlyByteBuf(Unpooled.buffer());
+            DiffControlPayload.STREAM_CODEC.encode(junk, new DiffControlPayload(new byte[] {99}));
+            DiffControlChannel.deliverToServer(null, DiffControlPayload.STREAM_CODEC.decode(junk).bytes());
+            require(captured.get() == null, "a malformed control must not reach the server handler");
+        } finally {
+            DiffControlChannel.resetServerHandler();
         }
         helper.succeed();
     }

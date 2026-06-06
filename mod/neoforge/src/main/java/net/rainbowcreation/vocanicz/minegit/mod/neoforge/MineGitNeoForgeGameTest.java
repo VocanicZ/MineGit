@@ -57,6 +57,8 @@ public final class MineGitNeoForgeGameTest {
                 MineGitGameTestLogic::diffPayloadRoundTripsToClientHandler);
         registerTest(event, env, "diff_server_send_frames_reach_captured_sink",
                 MineGitGameTestLogic::diffServerSendFramesReachCapturedSink);
+        registerTest(event, env, "control_packet_round_trips_to_server_handler",
+                MineGitGameTestLogic::controlPacketRoundTripsToServerHandler);
     }
 
     private static void registerTest(

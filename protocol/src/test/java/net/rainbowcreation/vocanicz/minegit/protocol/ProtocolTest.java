@@ -10,4 +10,9 @@ class ProtocolTest {
     void exposesDiffChannelConstant() {
         assertEquals("minegit:diff", Protocol.DIFF_CHANNEL);
     }
+
+    @Test
+    void exposesDiffControlChannelConstant() {
+        assertEquals("minegit:diffsub", Protocol.DIFF_CONTROL_CHANNEL);
+    }
 }
