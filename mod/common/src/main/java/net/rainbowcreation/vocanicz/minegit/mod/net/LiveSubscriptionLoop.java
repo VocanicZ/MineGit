@@ -110,6 +110,11 @@ public final class LiveSubscriptionLoop {
         unsubscribe(id);
     }
 
+    /** The configured live-refresh cadence in server ticks ({@code >= 1}). */
+    public int refreshTicks() {
+        return refreshTicks;
+    }
+
     /** Whether {@code id} is currently a live subscriber. */
     public boolean isSubscribed(UUID id) {
         return subscribers.contains(id);

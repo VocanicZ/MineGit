@@ -3,6 +3,8 @@ package net.rainbowcreation.vocanicz.minegit.mod;
 import net.rainbowcreation.vocanicz.minegit.mod.command.MineGitCommands;
 import net.rainbowcreation.vocanicz.minegit.mod.command.ServerCommandRuntime;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlChannel;
+import net.rainbowcreation.vocanicz.minegit.mod.overlay.OverlayConfig;
+import net.rainbowcreation.vocanicz.minegit.mod.overlay.OverlayConfigFile;
 import net.rainbowcreation.vocanicz.minegit.mod.platform.Platform;
 import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTracking;
 import com.mojang.brigadier.CommandDispatcher;
@@ -63,11 +65,35 @@ public final class MineGitMod {
         MineGitCommands.register(dispatcher, sharedRuntime());
     }
 
-    /** The shared command runtime, created once on first use and reused across registrations (#73). */
+    /**
+     * The shared command runtime, created once on first use and reused across registrations (#73). The
+     * live-overlay push cadence ({@code liveRefreshTicks}, issue #94) is read from the overlay config so
+     * a server operator can tune it; a missing/unreadable file falls back to the spec default (10).
+     */
     static synchronized ServerCommandRuntime sharedRuntime() {
         if (sharedRuntime == null) {
-            sharedRuntime = new ServerCommandRuntime();
+            sharedRuntime = new ServerCommandRuntime(
+                    java.time.Clock.systemUTC(),
+                    new net.rainbowcreation.vocanicz.minegit.mod.world.BackgroundExecutor("minegit-git"),
+                    loadLiveRefreshTicks());
         }
         return sharedRuntime;
+    }
+
+    /**
+     * Reads {@code liveRefreshTicks} from the overlay config (issue #94), falling back to the spec
+     * default ({@value OverlayConfig#DEFAULT_LIVE_REFRESH_TICKS}) when the config dir is unavailable —
+     * e.g. the {@code @ExpectPlatform} {@link Platform#configDir()} stub in headless unit tests, or an
+     * unreadable file. Never throws so the shared runtime always builds.
+     */
+    private static int loadLiveRefreshTicks() {
+        try {
+            OverlayConfig config =
+                    OverlayConfigFile.load(Platform.configDir().resolve(OverlayConfigFile.FILE_NAME));
+            return config.getLiveRefreshTicks();
+        } catch (RuntimeException | AssertionError e) {
+            // The @ExpectPlatform configDir() stub throws AssertionError under headless unit tests.
+            return OverlayConfig.DEFAULT_LIVE_REFRESH_TICKS;
+        }
     }
 }

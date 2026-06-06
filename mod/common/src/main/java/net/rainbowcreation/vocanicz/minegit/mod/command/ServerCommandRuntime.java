@@ -6,6 +6,7 @@ import net.rainbowcreation.vocanicz.minegit.core.git.Author;
 import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
 import net.rainbowcreation.vocanicz.minegit.core.git.UnknownRefException;
 import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
+import net.rainbowcreation.vocanicz.minegit.mod.net.DiffOverlaySender;
 import net.rainbowcreation.vocanicz.minegit.mod.net.LiveSubscriptionLoop;
 import net.rainbowcreation.vocanicz.minegit.protocol.DiffControl;
 import net.rainbowcreation.vocanicz.minegit.mod.world.BackgroundExecutor;
@@ -76,7 +77,7 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
      * {@link #onControl} from the loader entrypoint); the live recompute is driven once per server tick
      * by {@link #tick(MinecraftServer)} and is non-destructive (a read-only {@code peekDirty} status).
      */
-    private final LiveSubscriptionLoop live = new LiveSubscriptionLoop();
+    private final LiveSubscriptionLoop live;
 
     public ServerCommandRuntime() {
         this(Clock.systemUTC());
@@ -88,8 +89,24 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
 
     /** Test/override seam: inject the off-thread git executor (e.g. an inline one). */
     public ServerCommandRuntime(Clock clock, Executor background) {
+        this(clock, background, LiveSubscriptionLoop.DEFAULT_REFRESH_TICKS);
+    }
+
+    /**
+     * Full seam: also pick the live-overlay push cadence (issue #94, Spec C batch 2 §2.3). Production
+     * wiring loads {@code liveRefreshTicks} from the overlay config; {@link LiveSubscriptionLoop} clamps
+     * {@code >= 1}, and {@link net.rainbowcreation.vocanicz.minegit.mod.overlay.OverlayConfig} already
+     * does so before it reaches here.
+     */
+    public ServerCommandRuntime(Clock clock, Executor background, int liveRefreshTicks) {
         this.clock = clock;
         this.background = background;
+        this.live = new LiveSubscriptionLoop(liveRefreshTicks, DiffOverlaySender.channelSink());
+    }
+
+    /** The live-overlay push cadence in server ticks this runtime drives (issue #94). */
+    public int liveRefreshTicks() {
+        return live.refreshTicks();
     }
 
     /** Exposes the server-lifetime dirty tracker registry (for wiring mixin events). */
