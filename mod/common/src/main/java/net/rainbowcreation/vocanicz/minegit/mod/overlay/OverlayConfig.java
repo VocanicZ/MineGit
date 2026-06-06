@@ -134,8 +134,9 @@ public final class OverlayConfig {
     }
 
     /**
-     * The auto-expire timer in ticks (the unit {@link OverlayState#isExpired} / {@code tickExpiry}
-     * use). {@code 0} when the timer is disabled.
+     * The auto-expire timer in ticks (the unit {@link OverlayState#isExpired} uses). {@code 0} when
+     * the timer is disabled. Parsed-but-ignored by the live overlay model since issue #92 (auto-expire
+     * retired); retained for config back-compat and the pure {@link OverlayState#isExpired} helper.
      */
     public long lifetimeTicks() {
         return (long) autoExpireSeconds * TICKS_PER_SECOND;
