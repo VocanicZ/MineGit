@@ -6,6 +6,8 @@ import net.rainbowcreation.vocanicz.minegit.core.git.Author;
 import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
 import net.rainbowcreation.vocanicz.minegit.core.git.UnknownRefException;
 import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
+import net.rainbowcreation.vocanicz.minegit.mod.net.LiveSubscriptionLoop;
+import net.rainbowcreation.vocanicz.minegit.protocol.DiffControl;
 import net.rainbowcreation.vocanicz.minegit.mod.world.BackgroundExecutor;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.mod.world.CommitService;
@@ -24,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import net.minecraft.ChatFormatting;
@@ -67,6 +70,14 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
      */
     private final TickPump pump = new TickPump();
 
+    /**
+     * The server live-overlay loop (issue #93): the per-player subscription registry plus the
+     * throttled recompute→dedupe→push step. Subscriptions arrive over {@link DiffControl} (wired to
+     * {@link #onControl} from the loader entrypoint); the live recompute is driven once per server tick
+     * by {@link #tick(MinecraftServer)} and is non-destructive (a read-only {@code peekDirty} status).
+     */
+    private final LiveSubscriptionLoop live = new LiveSubscriptionLoop();
+
     public ServerCommandRuntime() {
         this(Clock.systemUTC());
     }
@@ -87,11 +98,80 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
     }
 
     /**
-     * Drains a slice of queued commit/checkout work on the server thread. Wire to a server-tick event
-     * (once per tick) so throttled reads/applies make progress without freezing the tick.
+     * Drains a slice of queued commit/checkout work on the server thread, then advances the live
+     * overlay loop (issue #93). Wire to a server-tick event (once per tick) so throttled reads/applies
+     * make progress without freezing the tick, and so live subscribers get a throttled, deduped,
+     * non-destructive working-vs-HEAD push for their current level.
      */
-    public void tick() {
+    public void tick(MinecraftServer server) {
         pump.pump();
+        if (server != null) {
+            live.tick(id -> pollSubscriber(server, id));
+        }
+    }
+
+    /**
+     * The live-overlay handler for one received {@link DiffControl} (wired to
+     * {@link net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlChannel#setServerHandler}): a
+     * {@code SUBSCRIBE} registers the player and immediately pushes the current working-vs-HEAD for
+     * their level; an {@code UNSUBSCRIBE} clears the subscription.
+     */
+    public void onControl(ServerPlayer player, DiffControl control) {
+        if (player == null) {
+            return;
+        }
+        if (control == DiffControl.SUBSCRIBE) {
+            live.subscribe(player, player.getUUID(), currentDiffFor(player));
+        } else if (control == DiffControl.UNSUBSCRIBE) {
+            live.unsubscribe(player.getUUID());
+        }
+    }
+
+    /** Clears a disconnecting player's live subscription (wire to the loader's player-quit event). */
+    public void onDisconnect(ServerPlayer player) {
+        if (player != null) {
+            live.disconnect(player.getUUID());
+        }
+    }
+
+    /**
+     * Resolves a subscribed player to its live push target: the online player and its current
+     * <em>non-destructive</em> working-vs-HEAD for the player's <strong>current level</strong>
+     * (dimension-aware). Returns {@code null} when the player is offline this tick, so the loop skips
+     * the push but keeps the subscription.
+     */
+    private LiveSubscriptionLoop.Snapshot pollSubscriber(MinecraftServer server, UUID id) {
+        ServerPlayer player = server.getPlayerList().getPlayer(id);
+        if (player == null) {
+            return null; // offline this tick; onDisconnect clears the subscription
+        }
+        WorldDiff diff = currentDiffFor(player);
+        if (diff == null) {
+            return null; // no bound repo for the player's level — nothing to push
+        }
+        return new LiveSubscriptionLoop.Snapshot(player, diff);
+    }
+
+    /**
+     * The player's current working-vs-HEAD for their current level, or {@code null} when that level
+     * has no MineGit repo. Uses {@link MineGitService#status} with the per-level tracker, so on the
+     * primed path it diffs read-only over {@code peekDirty()} — never draining the dirty set
+     * {@code /mg commit} relies on (Spec C batch 2 §2.3 hard constraint).
+     */
+    private WorldDiff currentDiffFor(ServerPlayer player) {
+        ServerLevel level = player.level();
+        String levelKey = levelKey(level);
+        LevelRepoRegistry registry = registryFor(level.getServer());
+        if (!registry.isBound(levelKey)) {
+            return null;
+        }
+        try {
+            return MineGitService.status(
+                    registry.repoPath(levelKey), adapterFor(level), clock, trackers.tracker(levelKey));
+        } catch (RuntimeException broken) {
+            // A repo hiccup must never crash the tick loop; just skip this player's push this tick.
+            return null;
+        }
     }
 
     @Override

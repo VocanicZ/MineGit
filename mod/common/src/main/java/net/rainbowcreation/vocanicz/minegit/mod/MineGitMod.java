@@ -2,10 +2,12 @@ package net.rainbowcreation.vocanicz.minegit.mod;
 
 import net.rainbowcreation.vocanicz.minegit.mod.command.MineGitCommands;
 import net.rainbowcreation.vocanicz.minegit.mod.command.ServerCommandRuntime;
+import net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlChannel;
 import net.rainbowcreation.vocanicz.minegit.mod.platform.Platform;
 import net.rainbowcreation.vocanicz.minegit.mod.world.DirtyTracking;
 import com.mojang.brigadier.CommandDispatcher;
 import dev.architectury.event.events.common.CommandRegistrationEvent;
+import dev.architectury.event.events.common.PlayerEvent;
 import dev.architectury.event.events.common.TickEvent;
 import net.minecraft.commands.CommandSourceStack;
 import org.eclipse.jgit.lib.Constants;
@@ -46,9 +48,15 @@ public final class MineGitMod {
         DirtyTracking.install(sharedRuntime().trackers());
         CommandRegistrationEvent.EVENT.register((dispatcher, registry, selection) -> registerCommands(dispatcher));
         // Drain a slice of throttled commit/checkout work each server tick, so a whole-world scan
-        // spreads over many ticks instead of freezing one ("Can't keep up!"). Fires on the server
-        // thread, where the queued level reads/applies are safe.
-        TickEvent.SERVER_POST.register(server -> sharedRuntime().tick());
+        // spreads over many ticks instead of freezing one ("Can't keep up!"). The same tick also
+        // advances the live-overlay loop (#93). Fires on the server thread, where the queued level
+        // reads/applies and the live recompute are safe.
+        TickEvent.SERVER_POST.register(server -> sharedRuntime().tick(server));
+        // Install the live-subscription handler over the minegit:diffsub control channel (#91→#93): a
+        // SUBSCRIBE/UNSUBSCRIBE from a client toggles that player's live working-vs-HEAD push.
+        DiffControlChannel.setServerHandler(sharedRuntime()::onControl);
+        // Clear a player's live subscription when they disconnect, so the loop never polls a gone player.
+        PlayerEvent.PLAYER_QUIT.register(player -> sharedRuntime().onDisconnect(player));
     }
 
     static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
