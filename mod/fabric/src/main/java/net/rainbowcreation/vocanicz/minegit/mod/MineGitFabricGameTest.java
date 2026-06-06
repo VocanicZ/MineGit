@@ -46,4 +46,9 @@ public final class MineGitFabricGameTest {
     public void controlPacketRoundTripsToServerHandler(GameTestHelper helper) {
         MineGitGameTestLogic.controlPacketRoundTripsToServerHandler(helper);
     }
+
+    @GameTest(maxTicks = 200)
+    public void liveSubscriptionPushesOnChangeThenStopsOnUnsubscribe(GameTestHelper helper) {
+        MineGitGameTestLogic.liveSubscriptionPushesOnChangeThenStopsOnUnsubscribe(helper);
+    }
 }

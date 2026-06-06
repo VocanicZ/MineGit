@@ -56,6 +56,15 @@ public final class DiffOverlaySender {
     }
 
     /**
+     * The production transmit sink: capability-gated delegation to the loader-bound {@link DiffChannel}.
+     * Exposed so the live-subscription loop (issue #93) can push over the same seam {@code /mg diff}
+     * uses, while still injecting a recording sink in tests.
+     */
+    public static Sink channelSink() {
+        return CHANNEL_SINK;
+    }
+
+    /**
      * Pushes {@code diff} (tagged {@code fromRef}/{@code toRef}) to {@code player} over the real
      * {@link DiffChannel}, gated on {@link DiffChannel#canSend}. Returns the number of frames sent —
      * {@code 0} when the player is incapable (silently skipped).

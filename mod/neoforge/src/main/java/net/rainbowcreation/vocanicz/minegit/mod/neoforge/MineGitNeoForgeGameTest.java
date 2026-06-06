@@ -59,6 +59,8 @@ public final class MineGitNeoForgeGameTest {
                 MineGitGameTestLogic::diffServerSendFramesReachCapturedSink);
         registerTest(event, env, "control_packet_round_trips_to_server_handler",
                 MineGitGameTestLogic::controlPacketRoundTripsToServerHandler);
+        registerTest(event, env, "live_subscription_pushes_on_change_then_stops_on_unsubscribe",
+                MineGitGameTestLogic::liveSubscriptionPushesOnChangeThenStopsOnUnsubscribe);
     }
 
     private static void registerTest(

@@ -14,6 +14,7 @@ import net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlChannel;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlPayload;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffOverlaySender;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffRawPayload;
+import net.rainbowcreation.vocanicz.minegit.mod.net.LiveSubscriptionLoop;
 import net.rainbowcreation.vocanicz.minegit.protocol.DiffControl;
 import net.rainbowcreation.vocanicz.minegit.protocol.DiffPayload;
 import net.rainbowcreation.vocanicz.minegit.protocol.Frame;
@@ -33,6 +34,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
 import io.netty.buffer.Unpooled;
@@ -345,6 +347,86 @@ public final class MineGitGameTestLogic {
         int skipped = DiffOverlaySender.send(null, source, "HEAD", "WORKING", incapable);
         require(skipped == 0, "a canSend=false player triggers no send, got " + skipped);
         require(incapable.sent.isEmpty(), "no packet may be enqueued for an incapable player");
+
+        helper.succeed();
+    }
+
+    /**
+     * Proves the server live-subscription loop end to end on a dedicated server (issue #93), without a
+     * live client: over a <em>real</em> {@link ModWorldAdapter} on a real {@code ServerLevel}, subscribe
+     * a player to the {@link LiveSubscriptionLoop} (initial push) → place blocks + mark their chunks
+     * dirty (mirroring the {@code setBlockState} mixin) → a live {@code tick} pushes the new
+     * working-vs-HEAD, whose captured frames reassemble + {@link DiffPayload#decode} back to the exact
+     * recomputed diff → a second tick with no change pushes nothing (dedupe) → {@code unsubscribe} →
+     * a further world change pushes nothing (subscription cleared). Frames are captured through a
+     * {@link DiffOverlaySender.Sink}, exercising the real {@code status → encode → frame} path the
+     * production loop rides while the GPU draw stays out of CI.
+     */
+    public static void liveSubscriptionPushesOnChangeThenStopsOnUnsubscribe(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        DirtyTrackerRegistry trackers = new DirtyTrackerRegistry();
+        String levelKey = ServerLevelAccess.levelKeyOf(level);
+        DimensionId dimension = ServerLevelAccess.dimensionOf(level);
+        DirtyChunkSet dirty = trackers.tracker(levelKey);
+        WorldAdapter adapter = trackedAdapterFor(helper, dirty);
+        Path repo = tempRepo();
+
+        // Baseline: the empty arena committed so the tracker is primed and the dirty set drained.
+        MineGitService.init(repo, adapter, CLOCK);
+        require(commit(adapter, repo, "baseline", dirty) != null, "baseline commit should snapshot the arena");
+        require(dirty.isPrimed(), "baseline commit must prime the tracker");
+
+        // Subscribe: the loop immediately pushes the current (empty) working-vs-HEAD.
+        CapturingSink sink = new CapturingSink(true);
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
+        UUID id = UUID.randomUUID();
+        WorldDiff initial = MineGitService.status(repo, adapter, CLOCK, dirty);
+        loop.subscribe(null, id, initial);
+        require(loop.isSubscribed(id), "subscribe must register the player");
+        require(!sink.sent.isEmpty(), "subscribe must push the initial working-vs-HEAD");
+
+        // The live poll recomputes status for the player's current level — non-destructive (peekDirty).
+        LiveSubscriptionLoop.Poller poller = pid ->
+                new LiveSubscriptionLoop.Snapshot(null, MineGitService.status(repo, adapter, CLOCK, dirty));
+
+        // Build: place blocks and mark their chunks dirty, exactly as the mixin bridge would.
+        for (BlockPos rel : SPOTS) {
+            helper.setBlock(rel, Blocks.GOLD_BLOCK);
+            markDirty(dirty, dimension, helper.absolutePos(rel));
+        }
+        WorldDiff expected = MineGitService.status(repo, adapter, CLOCK, dirty);
+        require(expected.getAdded() >= 1, "the placed blocks must show as a working-vs-HEAD change");
+
+        // Live tick: the loop recomputes, dedupes (changed), and pushes. Isolate just this push's frames.
+        sink.sent.clear();
+        require(loop.tick(poller) == 1, "the live tick must push the one subscriber on a change");
+        require(!sink.sent.isEmpty(), "a changed working-vs-HEAD must reach the sink");
+
+        Reassembler reassembler = new Reassembler();
+        byte[] full = null;
+        for (byte[] frameBytes : sink.sent) {
+            java.util.Optional<byte[]> done = reassembler.add(Frame.fromBytes(frameBytes));
+            if (done.isPresent()) {
+                full = done.get();
+            }
+        }
+        require(full != null, "the pushed frames must reassemble to a complete payload");
+        require(expected.equals(DiffPayload.decode(full)),
+                "the pushed diff must reassemble to the recomputed working-vs-HEAD");
+
+        // Dedupe: a second tick with no further change must push nothing.
+        sink.sent.clear();
+        require(loop.tick(poller) == 0, "an unchanged working-vs-HEAD must not push again");
+        require(sink.sent.isEmpty(), "no frame may be sent when the diff is unchanged");
+
+        // Unsubscribe: pushes must stop even when the world changes further.
+        loop.unsubscribe(id);
+        require(!loop.isSubscribed(id), "unsubscribe must clear the registry entry");
+        helper.setBlock(SPOTS[0], Blocks.DIAMOND_BLOCK);
+        markDirty(dirty, dimension, helper.absolutePos(SPOTS[0]));
+        sink.sent.clear();
+        require(loop.tick(poller) == 0, "no subscriber means no push after unsubscribe");
+        require(sink.sent.isEmpty(), "no frame may be sent after unsubscribe");
 
         helper.succeed();
     }
