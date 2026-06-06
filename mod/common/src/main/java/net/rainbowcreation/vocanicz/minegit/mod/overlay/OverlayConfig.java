@@ -38,6 +38,8 @@ public final class OverlayConfig {
     public static final double DEFAULT_MAX_RENDER_DISTANCE = 64.0;
     public static final int DEFAULT_RENDER_CAP = 4096;
     public static final int DEFAULT_AUTO_EXPIRE_SECONDS = 60;
+    /** Server live-overlay push cadence in server ticks (Spec C batch 2 §2.3); mirrors the loop default. */
+    public static final int DEFAULT_LIVE_REFRESH_TICKS = 10;
     public static final HudCorner DEFAULT_HUD_CORNER = HudCorner.TOP_LEFT;
 
     /** Ticks per second — the auto-expire timer is configured in seconds, applied in ticks. */
@@ -47,13 +49,25 @@ public final class OverlayConfig {
     private final double maxRenderDistance;
     private final int renderCap;
     private final int autoExpireSeconds;
+    private final int liveRefreshTicks;
     private final HudCorner hudCorner;
+
+    /** Back-compat 5-arg constructor: {@code liveRefreshTicks} defaults to {@value #DEFAULT_LIVE_REFRESH_TICKS}. */
+    public OverlayConfig(
+            String keybind,
+            double maxRenderDistance,
+            int renderCap,
+            int autoExpireSeconds,
+            HudCorner hudCorner) {
+        this(keybind, maxRenderDistance, renderCap, autoExpireSeconds, DEFAULT_LIVE_REFRESH_TICKS, hudCorner);
+    }
 
     public OverlayConfig(
             String keybind,
             double maxRenderDistance,
             int renderCap,
             int autoExpireSeconds,
+            int liveRefreshTicks,
             HudCorner hudCorner) {
         this.keybind = Objects.requireNonNull(keybind, "keybind");
         // maxRenderDistance < 0 is meaningless (cull radius); clamp to 0 (draws nothing).
@@ -62,6 +76,8 @@ public final class OverlayConfig {
         this.renderCap = Math.max(0, renderCap);
         // autoExpireSeconds < 0 collapses to 0 (= timer disabled), matching the spec's "0 disables".
         this.autoExpireSeconds = Math.max(0, autoExpireSeconds);
+        // The live loop requires refreshTicks >= 1 (0/negative would throw); clamp up to 1.
+        this.liveRefreshTicks = Math.max(1, liveRefreshTicks);
         this.hudCorner = Objects.requireNonNull(hudCorner, "hudCorner");
     }
 
@@ -72,6 +88,7 @@ public final class OverlayConfig {
                 DEFAULT_MAX_RENDER_DISTANCE,
                 DEFAULT_RENDER_CAP,
                 DEFAULT_AUTO_EXPIRE_SECONDS,
+                DEFAULT_LIVE_REFRESH_TICKS,
                 DEFAULT_HUD_CORNER);
     }
 
@@ -79,7 +96,7 @@ public final class OverlayConfig {
      * Builds a config from raw string keys, falling back to the default for any missing or
      * unparseable value (Spec C §3.1: "falls back to defaults for any missing key"). Recognized keys:
      * {@code keybind}, {@code maxRenderDistance}, {@code renderCap}, {@code autoExpireSeconds},
-     * {@code hudCorner}.
+     * {@code liveRefreshTicks}, {@code hudCorner}.
      */
     public static OverlayConfig fromProperties(Map<String, String> props) {
         Objects.requireNonNull(props, "props");
@@ -88,6 +105,7 @@ public final class OverlayConfig {
                 parseDouble(props.get("maxRenderDistance"), DEFAULT_MAX_RENDER_DISTANCE),
                 parseInt(props.get("renderCap"), DEFAULT_RENDER_CAP),
                 parseInt(props.get("autoExpireSeconds"), DEFAULT_AUTO_EXPIRE_SECONDS),
+                parseInt(props.get("liveRefreshTicks"), DEFAULT_LIVE_REFRESH_TICKS),
                 HudCorner.parse(props.get("hudCorner"), DEFAULT_HUD_CORNER));
     }
 
@@ -127,6 +145,14 @@ public final class OverlayConfig {
 
     public int getAutoExpireSeconds() {
         return autoExpireSeconds;
+    }
+
+    /**
+     * The server live-overlay push cadence in server ticks (Spec C batch 2 §2.3); always {@code >= 1}.
+     * The server live loop recomputes/dedupes/pushes working-vs-HEAD this often for each subscriber.
+     */
+    public int getLiveRefreshTicks() {
+        return liveRefreshTicks;
     }
 
     public HudCorner getHudCorner() {

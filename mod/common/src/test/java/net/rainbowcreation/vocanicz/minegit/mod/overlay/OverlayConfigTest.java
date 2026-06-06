@@ -17,7 +17,25 @@ class OverlayConfigTest {
         assertEquals(64.0, c.getMaxRenderDistance());
         assertEquals(4096, c.getRenderCap());
         assertEquals(60, c.getAutoExpireSeconds());
+        assertEquals(10, c.getLiveRefreshTicks());
         assertEquals(OverlayConfig.HudCorner.TOP_LEFT, c.getHudCorner());
+    }
+
+    @Test
+    void liveRefreshTicksParsesAndDefaultsToTen() {
+        assertEquals(10, OverlayConfig.fromProperties(new HashMap<String, String>()).getLiveRefreshTicks());
+        Map<String, String> props = new HashMap<String, String>();
+        props.put("liveRefreshTicks", "5");
+        assertEquals(5, OverlayConfig.fromProperties(props).getLiveRefreshTicks());
+    }
+
+    @Test
+    void liveRefreshTicksClampsToAtLeastOne() {
+        // The live loop requires refreshTicks >= 1; 0 / negative would throw in LiveSubscriptionLoop.
+        OverlayConfig zero = new OverlayConfig("J", 64, 4096, 60, 0, OverlayConfig.HudCorner.TOP_LEFT);
+        assertEquals(1, zero.getLiveRefreshTicks());
+        OverlayConfig neg = new OverlayConfig("J", 64, 4096, 60, -7, OverlayConfig.HudCorner.TOP_LEFT);
+        assertEquals(1, neg.getLiveRefreshTicks());
     }
 
     @Test
