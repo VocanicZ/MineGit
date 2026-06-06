@@ -15,14 +15,14 @@ import net.minecraft.client.Minecraft;
 
 import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffChannel;
+import net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlChannel;
 import net.rainbowcreation.vocanicz.minegit.mod.world.DimensionMapping;
 
 /**
  * The loader-agnostic client overlay wiring (issue #80, Spec C §2.3/§3). Installs everything that
- * Architectury can host commonly — the receive sink, the toggle keybind, the HUD, the per-tick
- * lifecycle (dimension tracking + auto-expire), and disconnect clearing — and delegates the one
- * loader-specific seam (world render) to {@link OverlayRenderHook}. Driven once from each loader's
- * client init.
+ * Architectury can host commonly — the receive sink, the subscription keybind, the HUD, the per-tick
+ * lifecycle (dimension tracking), and disconnect clearing — and delegates the one loader-specific seam
+ * (world render) to {@link OverlayRenderHook}. Driven once from each loader's client init.
  *
  * <p>State lives in the singleton {@link OverlayClientState#CLIENT}; this class is the glue that feeds
  * it. Client-only — never reached on a dedicated server.
@@ -40,6 +40,15 @@ public final class OverlayClientHooks {
     private static volatile long clientTick;
 
     private static KeyMapping toggleKey;
+
+    /**
+     * The keybind's subscription-control seam: encodes each {@link
+     * net.rainbowcreation.vocanicz.minegit.protocol.DiffControl} and sends it to the server over the
+     * {@code minegit:diffsub} channel (issue #91). Client-only — the {@code @ExpectPlatform} send is
+     * stitched per loader.
+     */
+    private static final OverlayClientState.ControlSender CONTROL_SENDER =
+            control -> DiffControlChannel.sendToServer(control.encode());
 
     private OverlayClientHooks() {
     }
@@ -64,13 +73,13 @@ public final class OverlayClientHooks {
         // current tick (the expiry baseline). The per-loader receiver funnels here via DiffChannel.
         DiffChannel.setClientHandler(bytes -> OverlayClientState.CLIENT.acceptFrame(bytes, clientTick));
 
-        // Keybind (default J): toggles visibility of the held overlay.
+        // Keybind (default J): toggles the live subscription — SUBSCRIBE/UNSUBSCRIBE over diffsub.
         toggleKey = new KeyMapping(
                 "key.minegit.toggle_overlay", GLFW.GLFW_KEY_J, KeyMapping.Category.MISC);
         KeyMappingRegistry.register(toggleKey);
 
         // Per-tick lifecycle: advance the clock, track the active dimension (a change auto-clears),
-        // drain keybind presses, and auto-expire a forgotten overlay.
+        // and drain keybind presses into subscription toggles.
         ClientTickEvent.CLIENT_POST.register(OverlayClientHooks::onClientTick);
 
         // Disconnect clears the held overlay and forgets the dimension.
@@ -93,10 +102,8 @@ public final class OverlayClientHooks {
 
         if (toggleKey != null) {
             while (toggleKey.consumeClick()) {
-                OverlayClientState.CLIENT.toggle();
+                OverlayClientState.CLIENT.toggleSubscription(CONTROL_SENDER);
             }
         }
-
-        OverlayClientState.CLIENT.tickExpiry(clientTick, config.lifetimeTicks());
     }
 }

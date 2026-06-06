@@ -4,6 +4,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
+import net.rainbowcreation.vocanicz.minegit.protocol.DiffControl;
 import net.rainbowcreation.vocanicz.minegit.protocol.Frame;
 import net.rainbowcreation.vocanicz.minegit.protocol.Reassembler;
 
@@ -27,9 +28,20 @@ public final class OverlayClientState {
     /** The client-side singleton the loader entrypoints (receiver, render, HUD, keybind) drive. */
     public static final OverlayClientState CLIENT = new OverlayClientState();
 
+    /**
+     * The seam the keybind uses to deliver a subscription control to the server. Production wires it
+     * to the {@code minegit:diffsub} client→server channel; tests inject a recording sender so the
+     * toggle→control-message logic is exercised headless.
+     */
+    public interface ControlSender {
+        /** Sends one subscription control ({@code SUBSCRIBE}/{@code UNSUBSCRIBE}) to the server. */
+        void send(DiffControl control);
+    }
+
     private Reassembler reassembler = new Reassembler();
     private OverlayState current;
     private boolean visible;
+    private boolean subscribed;
     private DimensionId activeDimension;
 
     /**
@@ -70,17 +82,41 @@ public final class OverlayClientState {
         return activeDimension;
     }
 
+    /** Whether the client currently holds a live subscription (the keybind is "on"). */
+    public boolean isSubscribed() {
+        return subscribed;
+    }
+
     /**
-     * Toggles overlay visibility (the keybind). A no-op when no overlay is held — it cannot become
-     * visible without something to show. Returns the resulting visibility.
+     * Toggles the live overlay subscription (the keybind, Spec C batch 2 §2.2; issue #92). Flips the
+     * subscription flag, emits the matching control over {@code sender}, and returns it:
+     * <ul>
+     *   <li><b>off → on:</b> sends {@link DiffControl#SUBSCRIBE} and marks the overlay visible so the
+     *       server's subsequent pushes render. Subscribing with nothing held is valid — it is what
+     *       makes the server start pushing; nothing draws until the first push arrives.</li>
+     *   <li><b>on → off:</b> sends {@link DiffControl#UNSUBSCRIBE} and {@link #clear()}s the held
+     *       overlay locally so it vanishes immediately, without waiting for the server to stop.</li>
+     * </ul>
+     * The subscription itself survives a {@link #clear()} (dimension change keeps it live); only this
+     * toggle, {@link #onDisconnect()}, flip it off.
+     *
+     * @param sender the seam that carries the control to the server (the {@code minegit:diffsub} channel)
+     * @return the control just sent ({@code SUBSCRIBE} or {@code UNSUBSCRIBE})
      */
-    public boolean toggle() {
-        if (current == null) {
-            visible = false;
-            return false;
+    public DiffControl toggleSubscription(ControlSender sender) {
+        Objects.requireNonNull(sender, "sender");
+        DiffControl control;
+        if (subscribed) {
+            subscribed = false;
+            clear();
+            control = DiffControl.UNSUBSCRIBE;
+        } else {
+            subscribed = true;
+            visible = true;
+            control = DiffControl.SUBSCRIBE;
         }
-        visible = !visible;
-        return visible;
+        sender.send(control);
+        return control;
     }
 
     /**
@@ -97,10 +133,14 @@ public final class OverlayClientState {
         activeDimension = dim;
     }
 
-    /** Clears on disconnect: drops the overlay, hides it, and forgets the active dimension. */
+    /**
+     * Clears on disconnect: drops the overlay, hides it, forgets the active dimension, and ends the
+     * subscription (the server-side registry is dropped on disconnect too, so the client must match).
+     */
     public void onDisconnect() {
         clear();
         activeDimension = null;
+        subscribed = false;
     }
 
     /**
@@ -114,38 +154,13 @@ public final class OverlayClientState {
     }
 
     /**
-     * Clears the overlay if it has outlived {@code lifetimeTicks} as of {@code now} (the configurable
-     * auto-expire timer). A non-positive {@code lifetimeTicks} disables expiry. Returns {@code true}
-     * iff this call cleared an expired overlay.
-     *
-     * @param now the current client tick
-     * @param lifetimeTicks the overlay lifetime in ticks ({@code autoExpireSeconds * 20}); {@code <= 0}
-     *     disables the timer
+     * Whether the renderer should draw this frame: an overlay is held, it is visible, and the active
+     * dimension is known and carries at least one box. Auto-expire is retired from the live model
+     * (issue #92): while subscribed the overlay reflects current live state and never self-expires —
+     * the only clears are toggle-off (UNSUB), disconnect, and dimension change.
      */
-    public boolean tickExpiry(long now, long lifetimeTicks) {
-        if (current == null) {
-            return false;
-        }
-        if (current.isExpired(now, lifetimeTicks)) {
-            clear();
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Whether the renderer should draw this frame: an overlay is held, it is visible, it has not
-     * expired, and the active dimension is known and carries at least one box. Mirrors the Spec C
-     * render gate ("visible + not expired + dimension matches").
-     *
-     * @param now the current client tick
-     * @param lifetimeTicks the overlay lifetime in ticks; {@code <= 0} disables expiry
-     */
-    public boolean shouldRender(long now, long lifetimeTicks) {
+    public boolean shouldRender() {
         if (!isVisible()) {
-            return false;
-        }
-        if (current.isExpired(now, lifetimeTicks)) {
             return false;
         }
         if (activeDimension == null) {

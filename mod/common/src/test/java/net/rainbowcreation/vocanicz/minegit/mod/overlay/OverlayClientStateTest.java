@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,6 +21,7 @@ import net.rainbowcreation.vocanicz.minegit.core.model.ChunkDiff;
 import net.rainbowcreation.vocanicz.minegit.core.model.ChunkPos;
 import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
 import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
+import net.rainbowcreation.vocanicz.minegit.protocol.DiffControl;
 import net.rainbowcreation.vocanicz.minegit.protocol.DiffPayload;
 import net.rainbowcreation.vocanicz.minegit.protocol.Frame;
 import net.rainbowcreation.vocanicz.minegit.protocol.Framing;
@@ -60,6 +62,16 @@ class OverlayClientStateTest {
             last = state.acceptFrame(f.toBytes(), now);
         }
         return last;
+    }
+
+    /** Records the controls the toggle sends, so the SUB/UNSUB wire is asserted headless. */
+    private static final class RecordingSender implements OverlayClientState.ControlSender {
+        final List<DiffControl> sent = new ArrayList<>();
+
+        @Override
+        public void send(DiffControl control) {
+            sent.add(control);
+        }
     }
 
     // ---- receive → reassemble → hold -----------------------------------------------------------
@@ -107,30 +119,71 @@ class OverlayClientStateTest {
         assertTrue(state.isVisible(), "the replacement is shown");
     }
 
-    // ---- keybind toggle ------------------------------------------------------------------------
+    // ---- keybind = subscription toggle (issue #92) ---------------------------------------------
 
     @Test
-    void toggleFlipsVisibilityWhenOverlayHeld() {
+    void firstToggleSubscribesAndSendsSubscribe() {
         OverlayClientState state = new OverlayClientState();
-        feedAll(state, payload(), 16, 0L);
-        assertTrue(state.isVisible());
+        RecordingSender sender = new RecordingSender();
 
-        assertFalse(state.toggle(), "toggle hides a shown overlay and returns the new state");
-        assertFalse(state.isVisible());
-        assertTrue(state.toggle(), "toggle shows it again");
-        assertTrue(state.isVisible());
+        DiffControl control = state.toggleSubscription(sender);
+
+        assertEquals(DiffControl.SUBSCRIBE, control, "first toggle subscribes");
+        assertTrue(state.isSubscribed(), "now subscribed");
+        assertEquals(Arrays.asList(DiffControl.SUBSCRIBE), sender.sent, "SUBSCRIBE went on the wire");
     }
 
     @Test
-    void toggleIsNoOpWithoutOverlay() {
+    void subscribeWhileEmptyStillSubscribesThenShowsIncomingPush() {
+        // The inversion's whole point: subscribing with nothing held is valid — it is what makes the
+        // server start pushing. Nothing renders until the first push arrives.
         OverlayClientState state = new OverlayClientState();
+        RecordingSender sender = new RecordingSender();
 
-        assertFalse(state.toggle(), "toggling with no overlay is a no-op, stays hidden");
-        assertFalse(state.isVisible());
-        assertNull(state.current());
+        state.toggleSubscription(sender);
+        assertTrue(state.isSubscribed());
+        assertNull(state.current(), "no overlay held yet");
+        assertFalse(state.isVisible(), "nothing to show before the first push");
+
+        feedAll(state, payload(), 16, 100L);
+        assertFalse(state.current() == null, "the pushed overlay is now held");
+        assertTrue(state.isVisible(), "and shown while subscribed");
     }
 
-    // ---- lifecycle: dimension change, disconnect, expiry ---------------------------------------
+    @Test
+    void secondToggleUnsubscribesSendsUnsubscribeAndClearsHeldOverlay() {
+        OverlayClientState state = new OverlayClientState();
+        RecordingSender sender = new RecordingSender();
+        state.toggleSubscription(sender);          // SUBSCRIBE
+        feedAll(state, payload(), 16, 0L);          // a push lands
+        assertFalse(state.current() == null, "sanity: overlay held while subscribed");
+
+        DiffControl control = state.toggleSubscription(sender);   // UNSUBSCRIBE
+
+        assertEquals(DiffControl.UNSUBSCRIBE, control, "second toggle unsubscribes");
+        assertFalse(state.isSubscribed(), "no longer subscribed");
+        assertNull(state.current(), "UNSUB clears the held overlay locally");
+        assertFalse(state.isVisible());
+        assertEquals(Arrays.asList(DiffControl.SUBSCRIBE, DiffControl.UNSUBSCRIBE), sender.sent,
+                "SUBSCRIBE then UNSUBSCRIBE on the wire");
+    }
+
+    @Test
+    void toggleAlternatesControlAcrossPresses() {
+        OverlayClientState state = new OverlayClientState();
+        RecordingSender sender = new RecordingSender();
+
+        state.toggleSubscription(sender);
+        state.toggleSubscription(sender);
+        state.toggleSubscription(sender);
+
+        assertEquals(
+                Arrays.asList(DiffControl.SUBSCRIBE, DiffControl.UNSUBSCRIBE, DiffControl.SUBSCRIBE),
+                sender.sent);
+        assertTrue(state.isSubscribed(), "odd number of presses leaves it subscribed");
+    }
+
+    // ---- lifecycle: dimension change, disconnect (no auto-expire) ------------------------------
 
     @Test
     void dimensionChangeClearsOverlay() {
@@ -159,6 +212,24 @@ class OverlayClientStateTest {
     }
 
     @Test
+    void dimensionChangeClearsOverlayButKeepsSubscription() {
+        // Spec C batch 2 §2.2/§2.3: a dimension change clears the held overlay (a diff for one
+        // dimension must not bleed into another), but the subscription stays live — the server
+        // recomputes for the new level and pushes a fresh overlay; no UNSUB is sent.
+        OverlayClientState state = new OverlayClientState();
+        RecordingSender sender = new RecordingSender();
+        state.toggleSubscription(sender);
+        state.setActiveDimension(DimensionId.OVERWORLD);
+        feedAll(state, payload(), 16, 0L);
+
+        state.setActiveDimension(DimensionId.THE_NETHER);
+
+        assertNull(state.current(), "the held overlay is cleared on dimension change");
+        assertTrue(state.isSubscribed(), "but the subscription stays live (no UNSUB)");
+        assertEquals(Arrays.asList(DiffControl.SUBSCRIBE), sender.sent, "no extra control sent");
+    }
+
+    @Test
     void disconnectClearsOverlayAndDimension() {
         OverlayClientState state = new OverlayClientState();
         state.setActiveDimension(DimensionId.OVERWORLD);
@@ -172,49 +243,34 @@ class OverlayClientStateTest {
     }
 
     @Test
-    void tickExpiryClearsAfterLifetime() {
+    void overlayDoesNotSelfExpireWhileSubscribed() {
+        // Auto-expire is retired from the live model (issue #92): a held overlay is never dropped by
+        // the passage of time — only toggle-off, disconnect, or dimension change clear it.
         OverlayClientState state = new OverlayClientState();
-        feedAll(state, payload(), 16, 0L);
-        long lifetime = 20L; // ticks
-
-        assertFalse(state.tickExpiry(19L, lifetime), "not yet expired");
-        assertFalse(state.current() == null, "still held before lifetime elapses");
-
-        assertTrue(state.tickExpiry(20L, lifetime), "expires once now - receivedAt >= lifetime");
-        assertNull(state.current(), "the expired overlay is cleared");
-        assertFalse(state.isVisible());
-    }
-
-    @Test
-    void tickExpiryNeverClearsWhenDisabled() {
-        OverlayClientState state = new OverlayClientState();
+        RecordingSender sender = new RecordingSender();
+        state.setActiveDimension(DimensionId.OVERWORLD);
+        state.toggleSubscription(sender);
         feedAll(state, payload(), 16, 0L);
 
-        assertFalse(state.tickExpiry(1_000_000L, 0L), "lifetime <= 0 disables auto-expire");
-        assertFalse(state.current() == null, "overlay survives with expiry disabled");
-    }
-
-    @Test
-    void tickExpiryIsNoOpWithoutOverlay() {
-        OverlayClientState state = new OverlayClientState();
-        assertFalse(state.tickExpiry(100L, 20L), "no overlay, nothing to expire");
+        // No tick clock to advance, no expiry call — the overlay simply stays.
+        assertFalse(state.current() == null, "overlay survives indefinitely while subscribed");
+        assertTrue(state.shouldRender(), "and keeps rendering");
     }
 
     // ---- render decision -----------------------------------------------------------------------
 
     @Test
-    void shouldRenderRequiresVisibleHeldUnexpiredMatchingDimension() {
+    void shouldRenderRequiresVisibleHeldMatchingDimension() {
         OverlayClientState state = new OverlayClientState();
+        RecordingSender sender = new RecordingSender();
         state.setActiveDimension(DimensionId.OVERWORLD);
+        state.toggleSubscription(sender);
         feedAll(state, payload(), 16, 0L);
 
-        assertTrue(state.shouldRender(0L, 60L), "visible, held, fresh, dimension matches");
+        assertTrue(state.shouldRender(), "visible, held, dimension matches");
 
-        state.toggle();
-        assertFalse(state.shouldRender(0L, 60L), "hidden overlay does not render");
-        state.toggle();
-
-        assertFalse(state.shouldRender(60L, 60L), "expired overlay does not render");
+        state.toggleSubscription(sender);   // UNSUB clears the overlay
+        assertFalse(state.shouldRender(), "unsubscribed → nothing to draw");
     }
 
     @Test
@@ -226,7 +282,7 @@ class OverlayClientStateTest {
         // would be needed; here we assert the cleared state simply does not render.
         state.setActiveDimension(DimensionId.THE_END);
 
-        assertFalse(state.shouldRender(0L, 60L), "no overlay after dimension change → nothing to draw");
+        assertFalse(state.shouldRender(), "no overlay after dimension change → nothing to draw");
     }
 
     @Test

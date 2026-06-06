@@ -44,7 +44,7 @@ public final class OverlayBoxRenderer {
 
     /**
      * Draws the held overlay for this frame, or nothing if the holder says it should not render
-     * (no overlay / hidden / expired / dimension mismatch). Publishes the cap's dropped count to
+     * (no overlay / hidden / dimension mismatch). Publishes the cap's dropped count to
      * {@link OverlayRenderStats} for the HUD. Called from each loader's world-render hook with the
      * frame's camera-relative pose and buffer source.
      *
@@ -53,9 +53,8 @@ public final class OverlayBoxRenderer {
      */
     public static void renderFrame(PoseStack pose, MultiBufferSource buffers) {
         OverlayClientState holder = OverlayClientState.CLIENT;
-        long now = OverlayClientHooks.clientTick();
         OverlayConfig config = OverlayClientHooks.config();
-        if (!holder.shouldRender(now, config.lifetimeTicks())) {
+        if (!holder.shouldRender()) {
             OverlayRenderStats.setLastDropped(0);
             return;
         }
