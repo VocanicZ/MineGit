@@ -17,20 +17,24 @@ class SubcommandTest {
     }
 
     @Test
-    void readSetupAndCommitAreAvailableToEveryPlayerButCheckoutAndRescanGateAtOp() {
-        // Spec D §4: read and commit are ungated (level 0); the world-mutating checkout and rescan gate at op.
+    void everySubcommandFallsBackToVanillaOpLevelTwo() {
+        // Locked-by-default model: no command is open to non-ops; the op fallback is vanilla op (2).
         for (Subcommand sub : Subcommand.values()) {
-            if (sub == Subcommand.CHECKOUT || sub == Subcommand.RESCAN) {
-                assertEquals(Subcommand.OP_PERMISSION_LEVEL, sub.permissionLevel(),
-                        sub + " mutates world/tracking state — gate at op level " + Subcommand.OP_PERMISSION_LEVEL);
-            } else {
-                assertEquals(0, sub.permissionLevel(), sub + " should be ungated");
-            }
+            assertEquals(Subcommand.OP_PERMISSION_LEVEL, sub.permissionLevel(),
+                    sub + " should fall back to vanilla op level " + Subcommand.OP_PERMISSION_LEVEL);
         }
     }
 
     @Test
-    void opSeamIsVanillaLevelTwoForTheMutatingCheckout() {
+    void checkoutIsTheOnlyAdminNodeEverythingElseIsUse() {
+        for (Subcommand sub : Subcommand.values()) {
+            String expected = sub == Subcommand.CHECKOUT ? "minegit.admin" : "minegit.use";
+            assertEquals(expected, sub.node(), sub + " should map to " + expected);
+        }
+    }
+
+    @Test
+    void opSeamIsVanillaLevelTwo() {
         assertEquals(2, Subcommand.OP_PERMISSION_LEVEL);
     }
 
