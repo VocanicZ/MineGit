@@ -14,7 +14,7 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.permissions.PermissionCheck;
+import net.rainbowcreation.vocanicz.minegit.mod.command.permission.MineGitPermissions;
 
 /**
  * Builds and registers the {@code /minegit} Brigadier tree — primary literal plus the {@code /mg}
@@ -184,7 +184,7 @@ public final class MineGitCommands {
     private static LiteralArgumentBuilder<CommandSourceStack> checkoutSubcommand(Runtime runtime) {
         Command<CommandSourceStack> action = runtime::checkout;
         return Commands.literal(Subcommand.CHECKOUT.literal())
-                .requires(Commands.hasPermission(permissionCheck(Subcommand.CHECKOUT.permissionLevel())))
+                .requires(MineGitPermissions.require(Subcommand.CHECKOUT.node(), Subcommand.CHECKOUT.permissionLevel()))
                 .then(Commands.argument(REF_ARG, StringArgumentType.string())
                         .suggests(runtime::suggestRefs)
                         .executes(action)
@@ -200,7 +200,7 @@ public final class MineGitCommands {
     private static LiteralArgumentBuilder<CommandSourceStack> diffSubcommand(Runtime runtime) {
         Command<CommandSourceStack> action = runtime::diff;
         return Commands.literal(Subcommand.DIFF.literal())
-                .requires(Commands.hasPermission(permissionCheck(Subcommand.DIFF.permissionLevel())))
+                .requires(MineGitPermissions.require(Subcommand.DIFF.node(), Subcommand.DIFF.permissionLevel()))
                 .executes(action)
                 .then(Commands.argument("refA", StringArgumentType.string())
                         .suggests(runtime::suggestRefs)
@@ -228,7 +228,7 @@ public final class MineGitCommands {
      */
     private static LiteralArgumentBuilder<CommandSourceStack> commitSubcommand(Runtime runtime) {
         return Commands.literal(Subcommand.COMMIT.literal())
-                .requires(Commands.hasPermission(permissionCheck(Subcommand.COMMIT.permissionLevel())))
+                .requires(MineGitPermissions.require(Subcommand.COMMIT.node(), Subcommand.COMMIT.permissionLevel()))
                 .executes(runtime::commit)
                 .then(Commands.literal("-m")
                         .then(Commands.argument(MESSAGE_ARG,
@@ -251,7 +251,7 @@ public final class MineGitCommands {
     private static LiteralArgumentBuilder<CommandSourceStack> initSubcommand(Runtime runtime) {
         Command<CommandSourceStack> action = runtime::init;
         return Commands.literal(Subcommand.INIT.literal())
-                .requires(Commands.hasPermission(permissionCheck(Subcommand.INIT.permissionLevel())))
+                .requires(MineGitPermissions.require(Subcommand.INIT.node(), Subcommand.INIT.permissionLevel()))
                 .executes(action)
                 .then(Commands.literal(NOFREEZE_FLAG).executes(action));
     }
@@ -260,25 +260,8 @@ public final class MineGitCommands {
     private static LiteralArgumentBuilder<CommandSourceStack> subcommand(
             Subcommand sub, Command<CommandSourceStack> action) {
         return Commands.literal(sub.literal())
-                .requires(Commands.hasPermission(permissionCheck(sub.permissionLevel())))
+                .requires(MineGitPermissions.require(sub.node(), sub.permissionLevel()))
                 .executes(action);
-    }
-
-    /**
-     * Maps a {@link Subcommand} permission level to the 1.21.11 {@link PermissionCheck} the
-     * Brigadier {@code requires} gate gets. Level 0 is any player ({@code LEVEL_ALL}); the mutating
-     * commands' level 2 ({@link Subcommand#OP_PERMISSION_LEVEL}) is vanilla op
-     * ({@code LEVEL_GAMEMASTERS}). Other levels are unused by MineGit and rejected loudly.
-     */
-    private static PermissionCheck permissionCheck(int level) {
-        switch (level) {
-            case 0:
-                return Commands.LEVEL_ALL;
-            case Subcommand.OP_PERMISSION_LEVEL:
-                return Commands.LEVEL_GAMEMASTERS;
-            default:
-                throw new IllegalArgumentException("unsupported MineGit permission level: " + level);
-        }
     }
 
     /** Bare {@code /mg}: print the available subcommands. */
