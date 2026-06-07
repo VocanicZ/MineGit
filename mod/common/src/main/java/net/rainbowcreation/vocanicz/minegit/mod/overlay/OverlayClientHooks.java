@@ -32,6 +32,13 @@ import net.rainbowcreation.vocanicz.minegit.mod.world.DimensionMapping;
 public final class OverlayClientHooks {
 
     /**
+     * Per-tick section budget for the live-diff engine — caps how many dirty/loaded chunk sections
+     * {@link OverlayClientState#tickEngine} re-diffs each client tick so a large dirty backlog is
+     * amortized over ticks rather than stalling the render thread.
+     */
+    private static final int SECTION_BUDGET = 8;
+
+    /**
      * The active client config. Defaults until {@link #init} reads the on-disk file (issue #81);
      * the keybind/HUD/render all read it through {@link #config()} so a reload would be picked up.
      */
@@ -74,6 +81,13 @@ public final class OverlayClientHooks {
         // current tick (the expiry baseline). The per-loader receiver funnels here via DiffChannel.
         DiffChannel.setClientHandler(bytes -> OverlayClientState.CLIENT.acceptFrame(bytes, clientTick));
 
+        // Live-diff engine seams (SP2 B2): read the live client world through ClientLevelAccess, and
+        // feed the engine the client world's block-changes + chunk-loads so it re-diffs what moved.
+        OverlayClientState.CLIENT.setLevelSupplier(ClientLevelAccess::current);
+        ClientWorldHooks.register(
+                (dim, x, y, z) -> OverlayClientState.CLIENT.onClientBlockChange(dim, x, y, z),
+                (dim, pos) -> OverlayClientState.CLIENT.onClientChunkLoad(dim, pos));
+
         // Keybind (default J): toggles the live subscription — SUBSCRIBE/UNSUBSCRIBE over diffsub.
         toggleKey = new KeyMapping(
                 "key.minegit.toggle_overlay", GLFW.GLFW_KEY_J, KeyMapping.Category.MISC);
@@ -113,6 +127,9 @@ public final class OverlayClientHooks {
                 OverlayClientState.CLIENT.toggleSubscription(CONTROL_SENDER);
             }
         }
+
+        // Advance the live-diff engine: re-diff up to SECTION_BUDGET dirty sections this tick.
+        OverlayClientState.CLIENT.tickEngine(SECTION_BUDGET);
     }
 
     /** Actionbar note when the keybind is pressed on a server that doesn't speak {@code minegit:diffsub}. */
