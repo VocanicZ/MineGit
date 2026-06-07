@@ -13,7 +13,7 @@ import java.util.Set;
  * Stores blocks in a sparse {@code (x,y,z) -> BlockState} map (absent = air) and a fixed set of
  * loaded chunks; mirrors the contract of the real {@code ServerLevelAccess}.
  */
-final class FakeLevelAccess implements LevelAccess {
+public final class FakeLevelAccess implements LevelAccess {
 
     private final DimensionId dimension;
     private final int minSectionY;
@@ -21,13 +21,13 @@ final class FakeLevelAccess implements LevelAccess {
     private final Set<ChunkPos> loaded = new LinkedHashSet<ChunkPos>();
     private final Map<Long, BlockState> blocks = new HashMap<Long, BlockState>();
 
-    FakeLevelAccess(DimensionId dimension, int minSectionY, int sectionCount) {
+    public FakeLevelAccess(DimensionId dimension, int minSectionY, int sectionCount) {
         this.dimension = dimension;
         this.minSectionY = minSectionY;
         this.sectionCount = sectionCount;
     }
 
-    void addLoadedChunk(int cx, int cz) {
+    public void addLoadedChunk(int cx, int cz) {
         loaded.add(new ChunkPos(cx, cz));
     }
 

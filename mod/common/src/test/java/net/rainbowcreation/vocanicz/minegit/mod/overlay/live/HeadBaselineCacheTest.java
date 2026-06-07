@@ -1,4 +1,4 @@
-package net.rainbowcreation.vocanicz.minegit.mod.world;
+package net.rainbowcreation.vocanicz.minegit.mod.overlay.live;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -11,7 +11,7 @@ import net.rainbowcreation.vocanicz.minegit.core.model.BlockChange;
 import net.rainbowcreation.vocanicz.minegit.core.model.BlockState;
 import net.rainbowcreation.vocanicz.minegit.core.model.ChunkPos;
 import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
-import net.rainbowcreation.vocanicz.minegit.mod.overlay.live.HeadBaselineCache;
+import net.rainbowcreation.vocanicz.minegit.mod.world.FakeLevelAccess;
 import org.junit.jupiter.api.Test;
 
 class HeadBaselineCacheTest {
