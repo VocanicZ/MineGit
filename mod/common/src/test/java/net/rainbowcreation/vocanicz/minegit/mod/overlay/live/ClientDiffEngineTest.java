@@ -170,11 +170,9 @@ class ClientDiffEngineTest {
         ClientDiffEngine engine = new ClientDiffEngine(256, () -> level);
         engine.onServerDiff(emptyDiff());
 
-        int seededTicks = 0;
         // Drain seeding: each tick seeds up to SEED_BUDGET chunks. After enough ticks all 10 are seeded.
         for (int i = 0; i < 10; i++) {
             engine.tick(64);
-            seededTicks++;
         }
         // All chunks clean vs HEAD → zero boxes regardless; the real assertion is no exception/freeze
         // and that an edit anywhere now diffs to exactly one box (every chunk has a baseline).

@@ -72,13 +72,15 @@ public final class ClientWorldLevelAccess implements LevelAccess {
         // the chunks that are actually loaded + non-empty. Bound the square to the SMALLER of the
         // render distance and the overlay radius (the box-cull distance) — baselining the full client
         // render distance overflows the bounded HeadBaselineCache and evicts the player's own chunk.
+        // Emit CENTER-OUT so the player's own chunk (and immediate neighbours, where edits land) are
+        // first in the engine's per-tick seed budget; otherwise a block placed right after toggling
+        // the overlay would be baked into a not-yet-frozen HEAD baseline and raise no box.
         int radius = Math.min(
                 Math.max(2, Minecraft.getInstance().options.getEffectiveRenderDistance()),
                 overlayChunkRadius());
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                addIfLoaded(out, center.x + dx, center.z + dz);
-            }
+        for (int[] off : net.rainbowcreation.vocanicz.minegit.mod.overlay.live.ChunkRingOrder
+                .centerOut(radius)) {
+            addIfLoaded(out, center.x + off[0], center.z + off[1]);
         }
         return out;
     }
