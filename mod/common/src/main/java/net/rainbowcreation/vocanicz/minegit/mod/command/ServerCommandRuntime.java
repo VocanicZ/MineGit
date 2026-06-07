@@ -73,10 +73,10 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
     private final TickPump pump = new TickPump();
 
     /**
-     * The server live-overlay loop (issue #93): the per-player subscription registry plus the
-     * throttled recompute→dedupe→push step. Subscriptions arrive over {@link DiffControl} (wired to
-     * {@link #onControl} from the loader entrypoint); the live recompute is driven once per server tick
-     * by {@link #tick(MinecraftServer)} and is non-destructive (a read-only {@code peekDirty} status).
+     * The server overlay subscription registry + snapshot push (Spec SP2 §2e). Subscriptions arrive
+     * over {@link DiffControl} (wired to {@link #onControl} from the loader entrypoint); the snapshot is
+     * pushed on SUBSCRIBE and on HEAD-move (commit/checkout completion) via {@link #pushHeadMove}. The
+     * per-tick recompute of the original live loop is retired — the client is now the live-diff engine.
      */
     private final LiveSubscriptionLoop live;
 
@@ -90,33 +90,18 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
 
     /** Test/override seam: inject the off-thread git executor (e.g. an inline one). */
     public ServerCommandRuntime(Clock clock, Executor background) {
-        this(clock, background, LiveSubscriptionLoop.DEFAULT_REFRESH_TICKS);
-    }
-
-    /**
-     * Full seam: also pick the live-overlay push cadence (issue #94, Spec C batch 2 §2.3). Production
-     * wiring loads {@code liveRefreshTicks} from the overlay config; {@link LiveSubscriptionLoop} clamps
-     * {@code >= 1}, and {@link net.rainbowcreation.vocanicz.minegit.mod.overlay.OverlayConfig} already
-     * does so before it reaches here.
-     */
-    public ServerCommandRuntime(Clock clock, Executor background, int liveRefreshTicks) {
-        this(clock, background, new LiveSubscriptionLoop(liveRefreshTicks, DiffOverlaySender.channelSink()));
+        this(clock, background, new LiveSubscriptionLoop());
     }
 
     /**
      * Test seam: inject the {@link LiveSubscriptionLoop} directly (e.g. a recording fake that captures
      * {@code subscribe}/{@code unsubscribe} calls without touching the real channel). Package-private so
-     * production code never uses it; only {@code ServerCommandRuntimeOnControlTest} in the same package.
+     * production code never uses it; only the same-package live-overlay tests do.
      */
     ServerCommandRuntime(Clock clock, Executor background, LiveSubscriptionLoop live) {
         this.clock = clock;
         this.background = background;
         this.live = live;
-    }
-
-    /** The live-overlay push cadence in server ticks this runtime drives (issue #94). */
-    public int liveRefreshTicks() {
-        return live.refreshTicks();
     }
 
     /** Exposes the server-lifetime dirty tracker registry (for wiring mixin events). */
@@ -125,16 +110,13 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
     }
 
     /**
-     * Drains a slice of queued commit/checkout work on the server thread, then advances the live
-     * overlay loop (issue #93). Wire to a server-tick event (once per tick) so throttled reads/applies
-     * make progress without freezing the tick, and so live subscribers get a throttled, deduped,
-     * non-destructive working-vs-HEAD push for their current level.
+     * Drains a slice of queued commit/checkout work on the server thread. Wire to a server-tick event
+     * (once per tick) so throttled reads/applies make progress without freezing the tick. The overlay
+     * no longer recomputes per tick — snapshots are pushed on SUBSCRIBE and on HEAD-move only (the
+     * client is the live-diff engine), so the {@code server} argument is unused here.
      */
     public void tick(MinecraftServer server) {
         pump.pump();
-        if (server != null) {
-            live.tick(id -> pollSubscriber(server, id));
-        }
     }
 
     /**
@@ -193,21 +175,28 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
     }
 
     /**
-     * Resolves a subscribed player to its live push target: the online player and its current
-     * <em>non-destructive</em> working-vs-HEAD for the player's <strong>current level</strong>
-     * (dimension-aware). Returns {@code null} when the player is offline this tick, so the loop skips
-     * the push but keeps the subscription.
+     * HEAD-move push: after a commit/checkout completes in {@code levelKey}, re-send a fresh
+     * working-vs-HEAD snapshot to every subscriber currently in that (moved) level. Mirrors the
+     * plugin's {@code repushSubscribersIn}. Read-only ({@link #currentDiffFor} diffs over
+     * {@code peekDirty}), so it never drains the dirty set {@code /mg commit} relies on.
+     *
+     * <p>Computes the diff once per subscriber; the known SP1 cleanup (compute once per level) is
+     * deferred and intentionally not done here.
      */
-    private LiveSubscriptionLoop.Snapshot pollSubscriber(MinecraftServer server, UUID id) {
-        ServerPlayer player = server.getPlayerList().getPlayer(id);
-        if (player == null) {
-            return null; // offline this tick; onDisconnect clears the subscription
+    private void pushHeadMove(MinecraftServer server, String levelKey) {
+        if (server == null) {
+            return;
         }
-        WorldDiff diff = currentDiffFor(player);
-        if (diff == null) {
-            return null; // no bound repo for the player's level — nothing to push
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (!live.isSubscribed(player.getUUID())) {
+                continue;
+            }
+            if (!levelKey.equals(levelKey(player.level()))) {
+                continue; // only subscribers in the moved level
+            }
+            WorldDiff diff = currentDiffFor(player); // read-only working-vs-new-HEAD
+            live.pushTo(player, player.getUUID(), diff);
         }
-        return new LiveSubscriptionLoop.Snapshot(player, diff);
     }
 
     /**
@@ -330,9 +319,16 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         ctx.getSource().sendSuccess(
                 () -> MineGitText.notice("Committing '" + levelKey + "'…"), false);
         // Reads hop to the server thread (throttled), git runs off-thread, completion lands back on
-        // the server thread where messaging the player is safe.
+        // the server thread where messaging the player is safe. On success HEAD has moved, so push a
+        // fresh working-vs-HEAD snapshot to in-level subscribers (mirrors the plugin's re-push).
+        MinecraftServer server = ctx.getSource().getServer();
         service.commit(repoPath, live, clock, message, author, tracker,
-                result -> reportCommit(ctx.getSource(), levelKey, result));
+                result -> {
+                    reportCommit(ctx.getSource(), levelKey, result);
+                    if (!result.isError()) {
+                        pushHeadMove(server, levelKey);
+                    }
+                });
         return 1;
     }
 
@@ -481,11 +477,17 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         // (over-marking is safe). Draining would risk dropping a block placed during the ref-move
         // window (under-marking, the one unsafe case); priming-only preserves such concurrent edits.
         final String capturedLevelKey = levelKey;
+        final MinecraftServer server = ctx.getSource().getServer();
         service.checkout(repoPath, live, clock, target, force, dirtyScoped, result -> {
             if (!result.isError()) {
                 tracker.prime();
             }
             reportCheckout(ctx.getSource(), capturedLevelKey, target, result);
+            if (!result.isError()) {
+                // HEAD has moved to the checked-out ref; re-push the fresh working-vs-HEAD snapshot
+                // to in-level subscribers (after prime, so the diff reads over the primed tracker).
+                pushHeadMove(server, capturedLevelKey);
+            }
         });
         return 1;
     }

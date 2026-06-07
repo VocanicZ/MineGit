@@ -26,7 +26,7 @@ class ServerCommandRuntimeOnControlTest {
 
     /** Builds a real {@link LiveSubscriptionLoop} backed by the no-op sink. */
     private static LiveSubscriptionLoop recordingLoop() {
-        return new LiveSubscriptionLoop(1, NO_OP_SINK);
+        return new LiveSubscriptionLoop(NO_OP_SINK);
     }
 
     /** Builds a runtime whose live loop is the given loop (test-seam constructor). */

@@ -20,9 +20,13 @@ import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
 import org.junit.jupiter.api.Test;
 
 /**
- * The headless half of the server live-subscription loop (issue #93, Spec C batch 2 §2.3): the
- * per-player subscription registry plus the recompute→dedupe→push step, driven through a recording
+ * The headless half of the server overlay subscription registry + snapshot push (Spec SP2 §2e): the
+ * per-player registry plus the SUBSCRIBE/HEAD-move push, driven through a recording
  * {@link DiffOverlaySender.Sink} so the whole decision path is unit-testable without a live server.
+ *
+ * <p>The per-tick recompute/dedupe of the original live loop is retired — the client is now the
+ * live-diff engine — so these assert the snapshot contract: push exactly once on subscribe (with a
+ * non-null diff) and once per HEAD-move {@code pushTo} to a current subscriber.
  *
  * <p>The loop never dereferences the {@link ServerPlayer} itself — capability and identity are
  * supplied by the sink and the caller's UUID — so {@code null} stands in for the real player the
@@ -50,11 +54,6 @@ final class LiveSubscriptionLoopTest {
         }
     }
 
-    /** A poller that returns a fixed snapshot for any id (or null = offline). */
-    private static LiveSubscriptionLoop.Poller pollerOf(WorldDiff diff) {
-        return id -> diff == null ? null : new LiveSubscriptionLoop.Snapshot(null, diff);
-    }
-
     private static WorldDiff diffWith(int added) {
         List<BlockChange> changes = new ArrayList<BlockChange>();
         for (int i = 0; i < Math.max(1, added); i++) {
@@ -74,7 +73,7 @@ final class LiveSubscriptionLoopTest {
     @Test
     void subscribeImmediatelyPushesCurrentDiff() {
         RecordingSink sink = new RecordingSink(true);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(sink);
         UUID id = UUID.randomUUID();
 
         loop.subscribe(null, id, diffWith(2));
@@ -86,7 +85,7 @@ final class LiveSubscriptionLoopTest {
     @Test
     void subscribePushesEvenAnEmptyInitialDiff() {
         RecordingSink sink = new RecordingSink(true);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(sink);
         UUID id = UUID.randomUUID();
 
         loop.subscribe(null, id, emptyDiff());
@@ -95,117 +94,93 @@ final class LiveSubscriptionLoopTest {
     }
 
     @Test
-    void unchangedDiffIsDedupedAndNotPushedAgain() {
+    void subscribeWithNullDiffDoesNotPush() {
         RecordingSink sink = new RecordingSink(true);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(sink);
         UUID id = UUID.randomUUID();
-        WorldDiff same = diffWith(2);
-        loop.subscribe(null, id, same);
-        int afterSubscribe = sink.sent.size();
 
-        loop.tick(pollerOf(same));
+        loop.subscribe(null, id, null);
 
-        assertEquals(afterSubscribe, sink.sent.size(),
-                "an unchanged working-vs-HEAD must not push again (dedupe)");
-    }
-
-    @Test
-    void changedDiffPushesOnNextTick() {
-        RecordingSink sink = new RecordingSink(true);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
-        UUID id = UUID.randomUUID();
-        loop.subscribe(null, id, diffWith(1));
-        int afterSubscribe = sink.sent.size();
-
-        loop.tick(pollerOf(diffWith(5)));
-
-        assertTrue(sink.sent.size() > afterSubscribe,
-                "a changed working-vs-HEAD must push on the next tick");
+        assertTrue(loop.isSubscribed(id), "subscribe still registers the player without a diff");
+        assertTrue(sink.sent.isEmpty(), "a null current diff (no bound repo) must not push on subscribe");
     }
 
     @Test
     void incapablePlayerNeverPushes() {
         RecordingSink sink = new RecordingSink(false);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(sink);
         UUID id = UUID.randomUUID();
 
         loop.subscribe(null, id, diffWith(2));
-        loop.tick(pollerOf(diffWith(5)));
+        loop.pushTo(null, id, diffWith(5));
 
         assertTrue(sink.sent.isEmpty(), "a canSend=false player must never receive a frame");
     }
 
     @Test
-    void unsubscribeStopsPushes() {
+    void pushToSubscriberSendsOnce() {
         RecordingSink sink = new RecordingSink(true);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(sink);
+        UUID id = UUID.randomUUID();
+        loop.subscribe(null, id, diffWith(1));
+        int afterSubscribe = sink.sent.size();
+
+        int frames = loop.pushTo(null, id, diffWith(5));
+
+        assertTrue(frames >= 1, "a HEAD-move push to a subscriber must send frames");
+        assertTrue(sink.sent.size() > afterSubscribe, "the HEAD-move snapshot must reach the sink");
+    }
+
+    @Test
+    void pushToWithNullDiffIsANoOp() {
+        RecordingSink sink = new RecordingSink(true);
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(sink);
+        UUID id = UUID.randomUUID();
+        loop.subscribe(null, id, diffWith(1));
+        int afterSubscribe = sink.sent.size();
+
+        assertEquals(0, loop.pushTo(null, id, null), "a null HEAD-move diff pushes nothing");
+        assertEquals(afterSubscribe, sink.sent.size(), "no frame may be sent for a null diff");
+    }
+
+    @Test
+    void unsubscribeThenPushToIsANoOp() {
+        RecordingSink sink = new RecordingSink(true);
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(sink);
         UUID id = UUID.randomUUID();
         loop.subscribe(null, id, diffWith(1));
         int afterSubscribe = sink.sent.size();
 
         loop.unsubscribe(id);
         assertFalse(loop.isSubscribed(id), "unsubscribe must clear the registry entry");
-        loop.tick(pollerOf(diffWith(9)));
+        assertEquals(0, loop.pushTo(null, id, diffWith(9)), "pushTo a non-subscriber pushes nothing");
 
         assertEquals(afterSubscribe, sink.sent.size(),
-                "no push may land after unsubscribe even when the diff changes");
+                "no push may land after unsubscribe even on a HEAD-move");
     }
 
     @Test
-    void disconnectStopsPushes() {
+    void disconnectThenPushToIsANoOp() {
         RecordingSink sink = new RecordingSink(true);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(sink);
         UUID id = UUID.randomUUID();
         loop.subscribe(null, id, diffWith(1));
         int afterSubscribe = sink.sent.size();
 
         loop.disconnect(id);
         assertFalse(loop.isSubscribed(id), "disconnect must clear the registry entry");
-        loop.tick(pollerOf(diffWith(9)));
+        assertEquals(0, loop.pushTo(null, id, diffWith(9)), "pushTo a disconnected player pushes nothing");
 
         assertEquals(afterSubscribe, sink.sent.size(), "no push may land after disconnect");
     }
 
     @Test
-    void tickFiresOnlyEveryRefreshTicks() {
+    void pushToUnknownIdIsANoOp() {
         RecordingSink sink = new RecordingSink(true);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(3, sink);
-        UUID id = UUID.randomUUID();
-        loop.subscribe(null, id, diffWith(1));
-        int afterSubscribe = sink.sent.size();
-        LiveSubscriptionLoop.Poller changing = pollerOf(diffWith(5));
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(sink);
 
-        loop.tick(changing); // tick 1 — below threshold
-        loop.tick(changing); // tick 2 — below threshold
-        assertEquals(afterSubscribe, sink.sent.size(),
-                "no recompute/push before refreshTicks elapse");
-
-        loop.tick(changing); // tick 3 — fires
-        assertTrue(sink.sent.size() > afterSubscribe,
-                "the loop recomputes and pushes once refreshTicks elapse");
-    }
-
-    @Test
-    void tickSkipsOfflineSubscribers() {
-        RecordingSink sink = new RecordingSink(true);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
-        UUID id = UUID.randomUUID();
-        loop.subscribe(null, id, diffWith(1));
-        int afterSubscribe = sink.sent.size();
-
-        loop.tick(pollerOf(null)); // poller returns null => offline / unbound
-
-        assertEquals(afterSubscribe, sink.sent.size(), "an offline subscriber pushes nothing");
-        assertTrue(loop.isSubscribed(id), "an offline subscriber stays registered until disconnect");
-    }
-
-    @Test
-    void noSubscribersIsANoOp() {
-        RecordingSink sink = new RecordingSink(true);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
-
-        loop.tick(pollerOf(diffWith(3)));
-
-        assertTrue(sink.sent.isEmpty(), "with no subscribers the loop does nothing");
+        assertEquals(0, loop.pushTo(null, UUID.randomUUID(), diffWith(3)),
+                "pushTo an id that never subscribed pushes nothing");
+        assertTrue(sink.sent.isEmpty(), "with no subscribers a HEAD-move push does nothing");
     }
 }

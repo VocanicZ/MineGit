@@ -31,7 +31,7 @@ class OverlayConfigTest {
 
     @Test
     void liveRefreshTicksClampsToAtLeastOne() {
-        // The live loop requires refreshTicks >= 1; 0 / negative would throw in LiveSubscriptionLoop.
+        // A refresh cadence < 1 tick is meaningless; OverlayConfig clamps it up to 1.
         OverlayConfig zero = new OverlayConfig("J", 64, 4096, 60, 0, OverlayConfig.HudCorner.TOP_LEFT);
         assertEquals(1, zero.getLiveRefreshTicks());
         OverlayConfig neg = new OverlayConfig("J", 64, 4096, 60, -7, OverlayConfig.HudCorner.TOP_LEFT);

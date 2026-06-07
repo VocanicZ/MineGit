@@ -76,7 +76,7 @@ public final class OverlayConfig {
         this.renderCap = Math.max(0, renderCap);
         // autoExpireSeconds < 0 collapses to 0 (= timer disabled), matching the spec's "0 disables".
         this.autoExpireSeconds = Math.max(0, autoExpireSeconds);
-        // The live loop requires refreshTicks >= 1 (0/negative would throw); clamp up to 1.
+        // A refresh cadence < 1 tick is meaningless; clamp up to 1 as a config invariant.
         this.liveRefreshTicks = Math.max(1, liveRefreshTicks);
         this.hudCorner = Objects.requireNonNull(hudCorner, "hudCorner");
     }

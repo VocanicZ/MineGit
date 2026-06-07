@@ -352,15 +352,17 @@ public final class MineGitGameTestLogic {
     }
 
     /**
-     * Proves the server live-subscription loop end to end on a dedicated server (issue #93), without a
-     * live client: over a <em>real</em> {@link ModWorldAdapter} on a real {@code ServerLevel}, subscribe
+     * Proves the server overlay snapshot push end to end on a dedicated server (Spec SP2 §2e), without
+     * a live client: over a <em>real</em> {@link ModWorldAdapter} on a real {@code ServerLevel}, subscribe
      * a player to the {@link LiveSubscriptionLoop} (initial push) → place blocks + mark their chunks
-     * dirty (mirroring the {@code setBlockState} mixin) → a live {@code tick} pushes the new
-     * working-vs-HEAD, whose captured frames reassemble + {@link DiffPayload#decode} back to the exact
-     * recomputed diff → a second tick with no change pushes nothing (dedupe) → {@code unsubscribe} →
-     * a further world change pushes nothing (subscription cleared). Frames are captured through a
-     * {@link DiffOverlaySender.Sink}, exercising the real {@code status → encode → frame} path the
-     * production loop rides while the GPU draw stays out of CI.
+     * dirty (mirroring the {@code setBlockState} mixin) → a HEAD-move {@link LiveSubscriptionLoop#pushTo}
+     * pushes the new working-vs-HEAD, whose captured frames reassemble + {@link DiffPayload#decode} back
+     * to the exact recomputed diff → {@code unsubscribe} → a further {@code pushTo} pushes nothing
+     * (subscription cleared). Frames are captured through a {@link DiffOverlaySender.Sink}, exercising the
+     * real {@code status → encode → frame} path the production push rides while the GPU draw stays out of CI.
+     *
+     * <p>The per-tick recompute of the original live loop is retired — the client is now the live-diff
+     * engine — so this asserts the SUBSCRIBE + HEAD-move snapshot contract, not a tick cadence.
      */
     public static void liveSubscriptionPushesOnChangeThenStopsOnUnsubscribe(GameTestHelper helper) {
         ServerLevel level = helper.getLevel();
@@ -378,16 +380,12 @@ public final class MineGitGameTestLogic {
 
         // Subscribe: the loop immediately pushes the current (empty) working-vs-HEAD.
         CapturingSink sink = new CapturingSink(true);
-        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(1, sink);
+        LiveSubscriptionLoop loop = new LiveSubscriptionLoop(sink);
         UUID id = UUID.randomUUID();
         WorldDiff initial = MineGitService.status(repo, adapter, CLOCK, dirty);
         loop.subscribe(null, id, initial);
         require(loop.isSubscribed(id), "subscribe must register the player");
         require(!sink.sent.isEmpty(), "subscribe must push the initial working-vs-HEAD");
-
-        // The live poll recomputes status for the player's current level — non-destructive (peekDirty).
-        LiveSubscriptionLoop.Poller poller = pid ->
-                new LiveSubscriptionLoop.Snapshot(null, MineGitService.status(repo, adapter, CLOCK, dirty));
 
         // Build: place blocks and mark their chunks dirty, exactly as the mixin bridge would.
         for (BlockPos rel : SPOTS) {
@@ -397,10 +395,10 @@ public final class MineGitGameTestLogic {
         WorldDiff expected = MineGitService.status(repo, adapter, CLOCK, dirty);
         require(expected.getAdded() >= 1, "the placed blocks must show as a working-vs-HEAD change");
 
-        // Live tick: the loop recomputes, dedupes (changed), and pushes. Isolate just this push's frames.
+        // HEAD-move push: pushTo re-sends the fresh (recomputed) snapshot. Isolate just this push's frames.
         sink.sent.clear();
-        require(loop.tick(poller) == 1, "the live tick must push the one subscriber on a change");
-        require(!sink.sent.isEmpty(), "a changed working-vs-HEAD must reach the sink");
+        require(loop.pushTo(null, id, expected) >= 1, "a HEAD-move push must reach the one subscriber");
+        require(!sink.sent.isEmpty(), "the recomputed working-vs-HEAD must reach the sink");
 
         Reassembler reassembler = new Reassembler();
         byte[] full = null;
@@ -414,18 +412,14 @@ public final class MineGitGameTestLogic {
         require(expected.equals(DiffPayload.decode(full)),
                 "the pushed diff must reassemble to the recomputed working-vs-HEAD");
 
-        // Dedupe: a second tick with no further change must push nothing.
-        sink.sent.clear();
-        require(loop.tick(poller) == 0, "an unchanged working-vs-HEAD must not push again");
-        require(sink.sent.isEmpty(), "no frame may be sent when the diff is unchanged");
-
-        // Unsubscribe: pushes must stop even when the world changes further.
+        // Unsubscribe: pushes must stop even when a further HEAD-move is signalled.
         loop.unsubscribe(id);
         require(!loop.isSubscribed(id), "unsubscribe must clear the registry entry");
         helper.setBlock(SPOTS[0], Blocks.DIAMOND_BLOCK);
         markDirty(dirty, dimension, helper.absolutePos(SPOTS[0]));
+        WorldDiff after = MineGitService.status(repo, adapter, CLOCK, dirty);
         sink.sent.clear();
-        require(loop.tick(poller) == 0, "no subscriber means no push after unsubscribe");
+        require(loop.pushTo(null, id, after) == 0, "no subscriber means no push after unsubscribe");
         require(sink.sent.isEmpty(), "no frame may be sent after unsubscribe");
 
         helper.succeed();
