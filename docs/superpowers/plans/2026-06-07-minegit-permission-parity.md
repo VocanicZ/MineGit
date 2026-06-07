@@ -402,16 +402,18 @@ In `mod/fabric/build.gradle.kts`, add to the `repositories { ... }` block (after
 In the `dependencies { ... }` block, after the `modApi("dev.architectury:architectury-fabric:$architecturyVersion")` line, add (bundled jar-in-jar so it ships in the production jar):
 ```kotlin
     // Grantable permission nodes on Fabric (permission parity 2026-06-07). Mapping-agnostic — wraps
-    // CommandSourceStack — so it is tolerant across MC patch versions. Bundled (include) so the
+    // SharedSuggestionProvider — so it is tolerant across MC patch versions. Bundled (include) so the
     // production jar carries it; a perms backend (LuckPerms) supplies actual grants at runtime.
-    modImplementation("me.lucko:fabric-permissions-api:0.3.1")
-    include("me.lucko:fabric-permissions-api:0.3.1")
+    // 0.4.2-patbox.1 is the release published on the nucleoid maven (verified: package
+    // me.lucko.fabric.api.permissions.v0.Permissions, with check(CommandSourceStack, String, int)).
+    modImplementation("me.lucko:fabric-permissions-api:0.4.2-patbox.1")
+    include("me.lucko:fabric-permissions-api:0.4.2-patbox.1")
 ```
 
 - [ ] **Step 2: Verify the dependency resolves**
 
 Run: `./gradlew :mod:fabric:dependencies --configuration modImplementation`
-Expected: `me.lucko:fabric-permissions-api:0.3.1` appears resolved (no "FAILED"). If it fails to resolve, bump the version (try `0.3.3`, then `0.4.0`) — the API surface used below (`Permissions.check(source, node, level)`) is stable across these.
+Expected: `me.lucko:fabric-permissions-api:0.4.2-patbox.1` appears resolved (no "FAILED"). Resolution needs network (not `--offline`) the first time, to fetch from the nucleoid maven; it is cached afterward. The API surface used below — `Permissions.check(source, node, level)` returning boolean — was verified present in this artifact.
 
 - [ ] **Step 3: Create the installer**
 
