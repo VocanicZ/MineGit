@@ -52,6 +52,9 @@ public final class HeadBaselineCache {
     private final LinkedHashMap<Key, ChunkBaseline> chunks;
 
     public HeadBaselineCache(int cap) {
+        if (cap < 1) {
+            throw new IllegalArgumentException("cap must be >= 1, was " + cap);
+        }
         this.cap = cap;
         this.chunks = new LinkedHashMap<Key, ChunkBaseline>(16, 0.75f, true) {
             @Override
@@ -67,6 +70,9 @@ public final class HeadBaselineCache {
      * <p>First captures a live-world snapshot of every non-air block in the chunk's Y range, then
      * overlays the dirty changes so the stored value reflects true HEAD state (not working-tree
      * state). After this call the chunk is never re-read from the live world.
+     *
+     * @param dirtyChanges must contain only changes whose chunk coordinate matches {@code chunkPos};
+     *     out-of-chunk positions would alias onto this chunk's local coordinates and corrupt it.
      */
     public void seed(
             DimensionId dim,

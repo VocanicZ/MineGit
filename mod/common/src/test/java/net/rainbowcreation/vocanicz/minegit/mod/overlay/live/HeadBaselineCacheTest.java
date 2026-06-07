@@ -56,6 +56,41 @@ class HeadBaselineCacheTest {
     }
 
     @Test
+    void removePositionTakesHeadFromOldState_creatingSectionWhenLiveIsAir() {
+        // REMOVE: present in HEAD, absent in working. Live snapshot captures nothing for this
+        // position, so the overlay must create the section map and store oldState.
+        FakeLevelAccess level = world(); // (5,5,5) is air in the live (working) world
+        List<BlockChange> dirty = Arrays.asList(BlockChange.remove(5, 5, 5, DIRT));
+        HeadBaselineCache cache = new HeadBaselineCache(256);
+        cache.seed(DIM, new ChunkPos(0, 0), dirty, level);
+        assertEquals(DIRT, cache.headAt(DIM, 5, 5, 5));
+    }
+
+    @Test
+    void baselineIsFrozen_liveEditAfterSeedDoesNotChangeHead() {
+        // The §3 correctness guard at the cache level: once seeded, headAt is immutable
+        // against subsequent live-world mutation (never re-read from the live world).
+        FakeLevelAccess level = world();
+        level.setBlock(4, 5, 4, STONE); // clean at seed
+        HeadBaselineCache cache = new HeadBaselineCache(256);
+        cache.seed(DIM, new ChunkPos(0, 0), Collections.emptyList(), level);
+        assertEquals(STONE, cache.headAt(DIM, 4, 5, 4));
+
+        level.setBlock(4, 5, 4, DIRT); // player edits the previously-clean block
+        assertEquals(STONE, cache.headAt(DIM, 4, 5, 4)); // frozen — still pre-edit HEAD
+    }
+
+    @Test
+    void rejectsCapBelowOne() {
+        try {
+            new HeadBaselineCache(0);
+            org.junit.jupiter.api.Assertions.fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+            // ok
+        }
+    }
+
+    @Test
     void absentPositionIsAir() {
         HeadBaselineCache cache = new HeadBaselineCache(256);
         cache.seed(DIM, new ChunkPos(0, 0), Collections.emptyList(), world());
@@ -78,10 +113,27 @@ class HeadBaselineCacheTest {
     @Test
     void dropDimensionClearsThatDimensionOnly() {
         HeadBaselineCache cache = new HeadBaselineCache(256);
+        FakeLevelAccess overworld = world();
+        overworld.setBlock(0, 5, 0, STONE);
+        cache.seed(DIM, new ChunkPos(0, 0), Collections.emptyList(), overworld);
+
+        FakeLevelAccess nether = new FakeLevelAccess(DimensionId.THE_NETHER, 0, 1);
+        nether.addLoadedChunk(0, 0);
+        nether.setBlock(0, 5, 0, DIRT);
+        cache.seed(DimensionId.THE_NETHER, new ChunkPos(0, 0), Collections.emptyList(), nether);
+
+        cache.dropDimension(DIM);
+        assertFalse(cache.hasChunk(DIM, new ChunkPos(0, 0)));
+        assertTrue(cache.hasChunk(DimensionId.THE_NETHER, new ChunkPos(0, 0))); // other dim preserved
+    }
+
+    @Test
+    void dropAllClearsEverything() {
+        HeadBaselineCache cache = new HeadBaselineCache(256);
         FakeLevelAccess level = world();
         level.setBlock(0, 5, 0, STONE);
         cache.seed(DIM, new ChunkPos(0, 0), Collections.emptyList(), level);
-        cache.dropDimension(DIM);
+        cache.dropAll();
         assertFalse(cache.hasChunk(DIM, new ChunkPos(0, 0)));
     }
 }
