@@ -46,11 +46,27 @@ public final class MineGitNeoForgePermissions {
     }
 
     private static boolean allowed(CommandSourceStack source, String node, int level) {
-        PermissionNode<Boolean> permNode = "minegit.admin".equals(node) ? ADMIN : USE;
+        PermissionNode<Boolean> permNode = permNodeFor(node);
         if (source.getEntity() instanceof ServerPlayer player) {
             return Boolean.TRUE.equals(PermissionAPI.getPermission(player, permNode));
         }
         // Console / RCON / command block: no player to resolve a node for — fall back to op level.
         return Commands.LEVEL_GAMEMASTERS.check(source.permissions());
+    }
+
+    /**
+     * The {@link PermissionNode} for a seam node string. MineGit only ever passes {@code minegit.use}
+     * or {@code minegit.admin} (from {@code Subcommand.node()}); an unrecognized string is a bug, so we
+     * throw loudly rather than silently under-restricting to the {@code use} node — matching the seam's
+     * own throw-on-unsupported-level stance.
+     */
+    private static PermissionNode<Boolean> permNodeFor(String node) {
+        if ("minegit.use".equals(node)) {
+            return USE;
+        }
+        if ("minegit.admin".equals(node)) {
+            return ADMIN;
+        }
+        throw new IllegalArgumentException("unknown MineGit permission node: " + node);
     }
 }
