@@ -3,6 +3,7 @@ package net.rainbowcreation.vocanicz.minegit.mod.neoforge;
 import net.rainbowcreation.vocanicz.minegit.mod.MineGitInfo;
 import net.rainbowcreation.vocanicz.minegit.mod.gametest.MineGitGameTestLogic;
 import com.mojang.serialization.MapCodec;
+import java.util.Arrays;
 import java.util.function.Consumer;
 import net.minecraft.core.Holder;
 import net.minecraft.gametest.framework.FunctionGameTestInstance;
@@ -36,8 +37,22 @@ public final class MineGitNeoForgeGameTest {
     private MineGitNeoForgeGameTest() {
     }
 
-    /** Hooks the registration onto the mod event bus; the event only fires when GameTest is enabled. */
+    /**
+     * Hooks the registration onto the mod event bus — but only when this mod's namespace is in
+     * {@code neoforge.enabledGameTestNamespaces} (set solely by the {@code gameTestServer} run).
+     * {@link RegisterGameTestsEvent} fires in any dev run, including {@code runClient}, and our
+     * {@link CodeTest} instances are code-backed (their body is an unserializable lambda). Without
+     * this gate they would be injected into the {@code minecraft:test_instance} registry, which the
+     * integrated server network-syncs on every world-join — encoding them throws
+     * {@code ClassCastException} (see {@link CodeTest#codec()}). Gating keeps them out of all
+     * interactive (and production) registries; only the headless GameTest server ever registers them,
+     * mirroring Fabric, whose {@code @GameTest} entrypoint loads solely under its gametest run.
+     */
     public static void register(IEventBus modEventBus) {
+        String enabledNamespaces = System.getProperty("neoforge.enabledGameTestNamespaces", "");
+        if (!Arrays.asList(enabledNamespaces.split(",")).contains(MineGitInfo.MOD_ID)) {
+            return;
+        }
         modEventBus.addListener(RegisterGameTestsEvent.class, MineGitNeoForgeGameTest::onRegister);
     }
 
@@ -77,8 +92,11 @@ public final class MineGitNeoForgeGameTest {
     /**
      * A code-backed {@link GameTestInstance}: it is registered directly into the (still-writable)
      * test registry, so unlike {@link FunctionGameTestInstance} it needs no entry in the frozen
-     * {@code TEST_FUNCTION} registry. Its {@link #codec()} is never exercised (the instance is never
-     * serialized on a dedicated GameTest server), so it borrows the function-instance codec.
+     * {@code TEST_FUNCTION} registry. Its {@link #codec()} borrows the function-instance codec, which
+     * would {@code ClassCastException} if ever invoked (this is not a {@code FunctionGameTestInstance}).
+     * That is safe only because {@link #register(IEventBus)} gates registration to the headless
+     * GameTest server, which never network-syncs the {@code test_instance} registry — so the codec is
+     * never exercised. Do not lift that gate without giving this type a real, self-encoding codec.
      */
     private static final class CodeTest extends GameTestInstance {
         private final Consumer<GameTestHelper> body;
