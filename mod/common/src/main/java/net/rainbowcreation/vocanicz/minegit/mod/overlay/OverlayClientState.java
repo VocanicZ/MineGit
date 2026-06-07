@@ -2,26 +2,33 @@ package net.rainbowcreation.vocanicz.minegit.mod.overlay;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 
+import net.rainbowcreation.vocanicz.minegit.core.model.ChunkPos;
 import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
+import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
+import net.rainbowcreation.vocanicz.minegit.mod.overlay.live.ClientDiffEngine;
+import net.rainbowcreation.vocanicz.minegit.mod.world.LevelAccess;
 import net.rainbowcreation.vocanicz.minegit.protocol.DiffControl;
+import net.rainbowcreation.vocanicz.minegit.protocol.DiffPayload;
 import net.rainbowcreation.vocanicz.minegit.protocol.Frame;
 import net.rainbowcreation.vocanicz.minegit.protocol.Reassembler;
 
 /**
- * The loader-agnostic client overlay holder + receiver (Spec C §2.3, §3; issue #80). It owns the
- * receive → reassemble → hold → toggle → expire → clear lifecycle so all of it is exercised headless
- * in JUnit; the per-loader render/HUD/keybind glue is a thin reader/driver over this state and never
- * carries logic that could fail silently.
+ * The loader-agnostic client overlay holder + receiver (Spec C §2.3, §3; SP2 §2d). It owns the
+ * receive → reassemble → seed → toggle → clear lifecycle so all of it is exercised headless in JUnit;
+ * the per-loader render/HUD/keybind glue is a thin reader/driver over this state and never carries
+ * logic that could fail silently.
  *
- * <p>Holds one current {@link OverlayState} (replace-on-new), a {@code visible} flag, and the client's
- * active {@link DimensionId}. A per-session {@link Reassembler} accumulates incoming
- * {@code minegit:diff} frames; the moment a payload completes it builds a fresh overlay, makes it
- * visible, and resets its expiry baseline.
+ * <p><b>Store → compute flip (SP2 B1):</b> this no longer <i>stores</i> the server-pushed
+ * {@link OverlayState}. Each completed {@code minegit:diff} payload is decoded to a {@link WorldDiff}
+ * and fed to a {@link ClientDiffEngine} as <b>baseline seed/reset</b> data — a frozen HEAD. The
+ * overlay the renderer reads is then <b>computed</b> by the engine each tick from the live client
+ * world ({@code current() == engine.currentOverlay()}); the pushed diff is never rendered directly.
  *
  * <p>Not thread-safe — drive it from the client thread (the render/tick/receive callbacks all run
  * there). The static {@link #CLIENT} singleton is the instance the loader entrypoints wire; tests use
- * their own instances.
+ * their own instances and inject a {@code FakeLevelAccess} via {@link #setLevelSupplier}.
  */
 public final class OverlayClientState {
 
@@ -38,21 +45,44 @@ public final class OverlayClientState {
         void send(DiffControl control);
     }
 
+    /** The default level supply before one is wired: "no world", so every engine path no-ops. */
+    private static final Supplier<LevelAccess> NO_LEVEL = () -> null;
+
+    /** Capacity (chunk baselines) of the engine's HEAD cache; matches the live-overlay budget. */
+    private static final int ENGINE_CACHE_CAP = 256;
+
+    /** Live-world supply, re-read each engine call so a dimension swap is picked up. */
+    private Supplier<LevelAccess> levelSupplier = NO_LEVEL;
+
+    /** The compute engine: turns seeds + the live world into the overlay the renderer reads. */
+    private final ClientDiffEngine engine = new ClientDiffEngine(ENGINE_CACHE_CAP, () -> levelSupplier.get());
+
     private Reassembler reassembler = new Reassembler();
-    private OverlayState current;
     private boolean visible;
     private boolean subscribed;
     private DimensionId activeDimension;
 
     /**
+     * Injects the live-world supply the engine diffs against (SP2 §2d). Production wires the bound
+     * client {@code ServerLevelAccess}; headless tests inject a {@code FakeLevelAccess}. A {@code null}
+     * supplier (or a supply that returns {@code null}) means "no world" and every world-touching engine
+     * path no-ops — nothing is computed.
+     */
+    public void setLevelSupplier(Supplier<LevelAccess> supplier) {
+        this.levelSupplier = supplier == null ? NO_LEVEL : supplier;
+    }
+
+    /**
      * Feeds one received {@code minegit:diff} frame's raw bytes into the reassembler. When the frame
-     * completes its payload, decodes it into a fresh {@link OverlayState} that <b>replaces</b> any
-     * held overlay, becomes visible, and stamps {@code now} as its expiry baseline; the completed
-     * overlay is returned. While the payload is still incomplete, returns {@link Optional#empty()}
-     * and leaves the held overlay untouched.
+     * completes its payload, it is decoded to a {@link WorldDiff} and fed to the engine as a
+     * <b>baseline seed/reset</b> (the frozen HEAD) — it is <i>never</i> the rendered overlay. The
+     * state becomes visible and the engine's freshly-computed overlay is returned (possibly
+     * box-empty until the next {@link #tickEngine}). While the payload is still incomplete, returns
+     * {@link Optional#empty()}.
      *
      * @param frameBytes the opaque bytes of one {@code minegit:diff} packet ({@link Frame#toBytes})
-     * @param now the current client tick (the overlay's {@code receivedAt} on completion)
+     * @param now the current client tick (retained for call-site compatibility; the live overlay
+     *     does not self-expire, so it is not stamped onto the computed overlay)
      */
     public Optional<OverlayState> acceptFrame(byte[] frameBytes, long now) {
         Objects.requireNonNull(frameBytes, "frameBytes");
@@ -61,20 +91,39 @@ public final class OverlayClientState {
         if (!payload.isPresent()) {
             return Optional.empty();
         }
-        OverlayState overlay = OverlayState.fromPayload(payload.get(), now);
-        this.current = overlay;
-        this.visible = true;
-        return Optional.of(overlay);
+        WorldDiff diff = DiffPayload.decode(payload.get()); // seed/reset data only — never rendered directly
+        engine.onServerDiff(diff);
+        visible = true;
+        return Optional.ofNullable(engine.currentOverlay());
     }
 
-    /** The held overlay, or {@code null} when none is held. */
+    /**
+     * Advances the engine by up to {@code sectionBudget} dirty sections (SP2 §2d), re-diffing the live
+     * world against the frozen HEAD and rebuilding the computed overlay. Driven from the client tick
+     * hook (B2). No-ops before the first seed or when no level is available.
+     */
+    public void tickEngine(int sectionBudget) {
+        engine.tick(sectionBudget);
+    }
+
+    /** A block in the live client world changed; mark its section dirty for the next re-diff. */
+    public void onClientBlockChange(DimensionId dim, int x, int y, int z) {
+        engine.onBlockChange(dim, x, y, z);
+    }
+
+    /** A chunk just loaded in the live client world; seed it against the held diff if one was received. */
+    public void onClientChunkLoad(DimensionId dim, ChunkPos pos) {
+        engine.onChunkLoad(dim, pos);
+    }
+
+    /** The computed overlay, or {@code null} before the first seed / after a reset. */
     public OverlayState current() {
-        return current;
+        return engine.currentOverlay();
     }
 
-    /** Whether the held overlay is currently shown. Always {@code false} when none is held. */
+    /** Whether the computed overlay is currently shown. {@code false} when nothing is computed. */
     public boolean isVisible() {
-        return visible && current != null;
+        return visible && engine.currentOverlay() != null;
     }
 
     /** The client's active dimension, or {@code null} before it is known / after disconnect. */
@@ -92,13 +141,15 @@ public final class OverlayClientState {
      * subscription flag, emits the matching control over {@code sender}, and returns it:
      * <ul>
      *   <li><b>off → on:</b> sends {@link DiffControl#SUBSCRIBE} and marks the overlay visible so the
-     *       server's subsequent pushes render. Subscribing with nothing held is valid — it is what
-     *       makes the server start pushing; nothing draws until the first push arrives.</li>
-     *   <li><b>on → off:</b> sends {@link DiffControl#UNSUBSCRIBE} and {@link #clear()}s the held
-     *       overlay locally so it vanishes immediately, without waiting for the server to stop.</li>
+     *       server's subsequent pushes (which seed the engine) render. Subscribing with nothing
+     *       computed is valid — it is what makes the server start pushing; nothing draws until the
+     *       first push seeds the engine.</li>
+     *   <li><b>on → off:</b> sends {@link DiffControl#UNSUBSCRIBE} and {@link #clear()}s locally
+     *       (resetting the engine) so the overlay vanishes immediately, without waiting for the
+     *       server to stop.</li>
      * </ul>
      * The subscription itself survives a {@link #clear()} (dimension change keeps it live); only this
-     * toggle, {@link #onDisconnect()}, flip it off.
+     * toggle and {@link #onDisconnect()} flip it off.
      *
      * @param sender the seam that carries the control to the server (the {@code minegit:diffsub} channel)
      * @return the control just sent ({@code SUBSCRIBE} or {@code UNSUBSCRIBE})
@@ -122,52 +173,54 @@ public final class OverlayClientState {
     }
 
     /**
-     * Updates the client's active dimension. A <b>change</b> from a previously-known dimension
-     * auto-clears the held overlay (Spec C §3 lifecycle): a diff computed for one dimension must not
-     * bleed into another. The first time the dimension becomes known (from {@code null}) clears
-     * nothing — there is no overlay to invalidate yet.
+     * Updates the client's active dimension. A <b>change</b> from a previously-known dimension drops
+     * that dimension's baselines from the engine (Spec C §3 lifecycle): a diff computed for one
+     * dimension must not bleed into another, and the now-active dimension recomputes from its own
+     * (re-pushed) seed. The first time the dimension becomes known (from {@code null}) drops nothing.
      */
     public void setActiveDimension(DimensionId dim) {
         Objects.requireNonNull(dim, "dim");
         if (activeDimension != null && !activeDimension.equals(dim)) {
-            clear();
+            engine.dropDimension(activeDimension);
         }
         activeDimension = dim;
     }
 
     /**
-     * Clears on disconnect: drops the overlay, hides it, forgets the active dimension, and ends the
-     * subscription (the server-side registry is dropped on disconnect too, so the client must match).
+     * Clears on disconnect: resets the compute engine, hides the overlay, forgets the active
+     * dimension, ends the subscription, and discards any in-flight reassembly (the server-side
+     * registry is dropped on disconnect too, so the client must match).
      */
     public void onDisconnect() {
-        clear();
-        activeDimension = null;
         subscribed = false;
+        visible = false;
+        activeDimension = null;
+        reassembler = new Reassembler();
+        engine.reset();
     }
 
     /**
-     * Drops the held overlay, hides it, and discards any in-flight reassembly session so a stale
-     * partial transfer can never complete into a new overlay after the player has moved on.
+     * Resets the compute engine, hides the overlay, and discards any in-flight reassembly session so a
+     * stale partial transfer can never complete into a new seed after the player has moved on. Keeps
+     * the active dimension and (for the dimension-change case) the subscription.
      */
     public void clear() {
-        current = null;
-        visible = false;
         reassembler = new Reassembler();
+        engine.reset();
+        visible = false;
     }
 
     /**
-     * Whether the renderer should draw this frame: an overlay is held, it is visible, and the active
-     * dimension is known and carries at least one box. Auto-expire is retired from the live model
-     * (issue #92): while subscribed the overlay reflects current live state and never self-expires —
-     * the only clears are toggle-off (UNSUB), disconnect, and dimension change.
+     * Whether the renderer should draw this frame: the overlay is visible, the active dimension is
+     * known, and the <b>computed</b> overlay carries at least one box for it. Auto-expire is retired
+     * from the live model (issue #92): while subscribed the overlay reflects current live state and
+     * never self-expires — the only clears are toggle-off (UNSUB), disconnect, and dimension change.
      */
     public boolean shouldRender() {
-        if (!isVisible()) {
+        if (!visible || activeDimension == null) {
             return false;
         }
-        if (activeDimension == null) {
-            return false;
-        }
-        return !current.boxes(activeDimension).isEmpty();
+        OverlayState overlay = engine.currentOverlay();
+        return overlay != null && !overlay.boxes(activeDimension).isEmpty();
     }
 }

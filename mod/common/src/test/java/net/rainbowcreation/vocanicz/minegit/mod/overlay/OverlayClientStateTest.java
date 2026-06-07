@@ -2,6 +2,7 @@ package net.rainbowcreation.vocanicz.minegit.mod.overlay;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -22,6 +23,7 @@ import net.rainbowcreation.vocanicz.minegit.core.model.ChunkDiff;
 import net.rainbowcreation.vocanicz.minegit.core.model.ChunkPos;
 import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
 import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
+import net.rainbowcreation.vocanicz.minegit.mod.world.FakeLevelAccess;
 import net.rainbowcreation.vocanicz.minegit.protocol.DiffControl;
 import net.rainbowcreation.vocanicz.minegit.protocol.DiffPayload;
 import net.rainbowcreation.vocanicz.minegit.protocol.Frame;
@@ -43,11 +45,12 @@ class OverlayClientStateTest {
 
     private static WorldDiff sampleDiff() {
         Map<DimensionId, List<ChunkDiff>> dims = new LinkedHashMap<DimensionId, List<ChunkDiff>>();
+        // Y in section 0 ([0,16)) so a FakeLevelAccess(OVERWORLD, 0, 1) seeds + diffs these positions.
         dims.put(DimensionId.OVERWORLD, Arrays.asList(
                 chunk(0, 0,
-                        BlockChange.add(1, 64, 1, STONE),
-                        BlockChange.remove(2, 64, 2, DIRT),
-                        BlockChange.change(3, 64, 3, DIRT, STONE))));
+                        BlockChange.add(1, 5, 1, STONE),
+                        BlockChange.remove(2, 5, 2, DIRT),
+                        BlockChange.change(3, 5, 3, DIRT, STONE))));
         return new WorldDiff(dims, 1, 1, 1);
     }
 
@@ -63,6 +66,29 @@ class OverlayClientStateTest {
             last = state.acceptFrame(f.toBytes(), now);
         }
         return last;
+    }
+
+    /**
+     * A {@link FakeLevelAccess} for the OVERWORLD with chunk (0,0) loaded, whose live world matches
+     * the working-tree (newState) side of {@link #sampleDiff()} so the engine computes real boxes
+     * after a seed+tick. The sample's CHANGE entry is {@code (3,5,3) DIRT->STONE}: setting the live
+     * block to STONE there means HEAD (frozen as DIRT via the dirty-overlay) differs from live (STONE),
+     * yielding at least one CHANGE box; the REMOVE entry {@code (2,5,2)} (HEAD DIRT, live air) yields
+     * another.
+     */
+    private static FakeLevelAccess sampleLevel() {
+        FakeLevelAccess level = new FakeLevelAccess(DimensionId.OVERWORLD, 0, 1);
+        level.addLoadedChunk(0, 0);
+        level.setBlock(3, 5, 3, STONE);
+        return level;
+    }
+
+    /** A state wired to {@link #sampleLevel()} and the OVERWORLD active dimension. */
+    private static OverlayClientState seededState(FakeLevelAccess level) {
+        OverlayClientState state = new OverlayClientState();
+        state.setLevelSupplier(() -> level);
+        state.setActiveDimension(DimensionId.OVERWORLD);
+        return state;
     }
 
     /** Records the controls the toggle sends, so the SUB/UNSUB wire is asserted headless. */
@@ -91,33 +117,68 @@ class OverlayClientStateTest {
     }
 
     @Test
-    void completedPayloadBuildsAndHoldsVisibleOverlay() {
-        OverlayClientState state = new OverlayClientState();
+    void completedPayloadSeedsEngineAndBecomesVisible() {
+        // Migrated from the stored-state model: the completing frame no longer *holds* the pushed
+        // overlay verbatim — it seeds the engine, which computes the overlay from the live world. The
+        // accept result is the engine's freshly-computed overlay, and the state becomes visible.
+        FakeLevelAccess level = sampleLevel();
+        OverlayClientState state = seededState(level);
 
         Optional<OverlayState> result = feedAll(state, payload(), 16, 100L);
 
-        assertTrue(result.isPresent(), "the completing frame yields the overlay");
-        assertSame(result.get(), state.current(), "the held overlay is the one just built");
-        assertEquals(100L, state.current().getReceivedAt(), "receivedAt stamps the completing tick");
-        assertEquals(1, state.current().getAdded());
-        assertEquals(1, state.current().getRemoved());
-        assertEquals(1, state.current().getChanged());
+        assertTrue(result.isPresent(), "the completing frame yields the computed overlay");
+        assertSame(result.get(), state.current(), "the returned overlay is the engine's current one");
         assertTrue(state.isVisible(), "a freshly received overlay is shown");
+        state.tickEngine(64); // the seed marks sections dirty; the tick re-diffs them into boxes
+        assertFalse(state.current().boxes(DimensionId.OVERWORLD).isEmpty(),
+                "the engine computes boxes from the live world after the seed + tick");
     }
 
     @Test
-    void newOverlayReplacesAndResetsExpiry() {
-        OverlayClientState state = new OverlayClientState();
+    void newPushReseedsEngine() {
+        // Migrated: a second push re-seeds (HEAD-move reset semantics in the engine) and the overlay
+        // still reflects the live world; visibility stays on.
+        FakeLevelAccess level = sampleLevel();
+        OverlayClientState state = seededState(level);
         feedAll(state, payload(), 16, 10L);
-        OverlayState first = state.current();
+        state.tickEngine(64);
+        assertNotNull(state.current(), "sanity: overlay computed after first push");
 
         feedAll(state, payload(), 16, 500L);
-        OverlayState second = state.current();
+        state.tickEngine(64);
 
-        assertSame(second, state.current(), "the newer overlay replaces the older");
-        assertFalse(first == second, "replace-on-new builds a fresh overlay");
-        assertEquals(500L, second.getReceivedAt(), "the replacement resets the expiry baseline");
+        assertNotNull(state.current(), "the overlay survives a re-seed");
+        assertFalse(state.current().boxes(DimensionId.OVERWORLD).isEmpty(),
+                "and still reflects the live world after the re-seed");
         assertTrue(state.isVisible(), "the replacement is shown");
+    }
+
+    @Test
+    void acceptFrameSeedsEngineAndComputesOverlayFromLiveWorld() {
+        net.rainbowcreation.vocanicz.minegit.mod.world.FakeLevelAccess level =
+            new net.rainbowcreation.vocanicz.minegit.mod.world.FakeLevelAccess(
+                net.rainbowcreation.vocanicz.minegit.core.model.DimensionId.OVERWORLD, 0, 1);
+        level.addLoadedChunk(0, 0);
+        // Set the live world so it matches the working-tree (newState) of one entry in the sample diff,
+        // so the engine computes at least one box. The sample has change(3,5,3, DIRT->STONE):
+        level.setBlock(3, 5, 3, new net.rainbowcreation.vocanicz.minegit.core.model.BlockState("minecraft:stone"));
+
+        OverlayClientState state = new OverlayClientState();
+        state.setLevelSupplier(() -> level);
+        state.setActiveDimension(net.rainbowcreation.vocanicz.minegit.core.model.DimensionId.OVERWORLD);
+        feedAll(state, payload(), Framing.DEFAULT_MAX_FRAME_BYTES, 0L);
+        state.tickEngine(64);
+
+        org.junit.jupiter.api.Assertions.assertNotNull(state.current());
+        org.junit.jupiter.api.Assertions.assertTrue(state.current().boxes(
+            net.rainbowcreation.vocanicz.minegit.core.model.DimensionId.OVERWORLD).size() >= 1);
+    }
+
+    @Test
+    void onDisconnectResetsEngine() {
+        OverlayClientState state = new OverlayClientState();
+        state.onDisconnect();
+        org.junit.jupiter.api.Assertions.assertNull(state.current());
     }
 
     // ---- keybind = subscription toggle (issue #92) ---------------------------------------------
@@ -146,24 +207,28 @@ class OverlayClientStateTest {
         assertNull(state.current(), "no overlay held yet");
         assertFalse(state.isVisible(), "nothing to show before the first push");
 
+        state.setLevelSupplier(() -> sampleLevel());
+        state.setActiveDimension(DimensionId.OVERWORLD);
         feedAll(state, payload(), 16, 100L);
-        assertFalse(state.current() == null, "the pushed overlay is now held");
+        state.tickEngine(64);
+        assertFalse(state.current() == null, "the pushed overlay is now computed");
         assertTrue(state.isVisible(), "and shown while subscribed");
     }
 
     @Test
     void secondToggleUnsubscribesSendsUnsubscribeAndClearsHeldOverlay() {
-        OverlayClientState state = new OverlayClientState();
+        OverlayClientState state = seededState(sampleLevel());
         RecordingSender sender = new RecordingSender();
         state.toggleSubscription(sender);          // SUBSCRIBE
         feedAll(state, payload(), 16, 0L);          // a push lands
-        assertFalse(state.current() == null, "sanity: overlay held while subscribed");
+        state.tickEngine(64);
+        assertFalse(state.current() == null, "sanity: overlay computed while subscribed");
 
         DiffControl control = state.toggleSubscription(sender);   // UNSUBSCRIBE
 
         assertEquals(DiffControl.UNSUBSCRIBE, control, "second toggle unsubscribes");
         assertFalse(state.isSubscribed(), "no longer subscribed");
-        assertNull(state.current(), "UNSUB clears the held overlay locally");
+        assertNull(state.current(), "UNSUB resets the engine — nothing computed");
         assertFalse(state.isVisible());
         assertEquals(Arrays.asList(DiffControl.SUBSCRIBE, DiffControl.UNSUBSCRIBE), sender.sent,
                 "SUBSCRIBE then UNSUBSCRIBE on the wire");
@@ -203,10 +268,11 @@ class OverlayClientStateTest {
 
     @Test
     void failedUnsubscribeSendKeepsSubscriptionAndOverlay() {
-        OverlayClientState state = new OverlayClientState();
+        OverlayClientState state = seededState(sampleLevel());
         RecordingSender ok = new RecordingSender();
         state.toggleSubscription(ok);                 // SUBSCRIBE lands
-        feedAll(state, payload(), 16, 0L);             // overlay held
+        feedAll(state, payload(), 16, 0L);             // overlay computed
+        state.tickEngine(64);
         OverlayClientState.ControlSender boom = c -> {
             throw new IllegalStateException("connection gone");
         };
@@ -220,29 +286,34 @@ class OverlayClientStateTest {
     // ---- lifecycle: dimension change, disconnect (no auto-expire) ------------------------------
 
     @Test
-    void dimensionChangeClearsOverlay() {
-        OverlayClientState state = new OverlayClientState();
-        state.setActiveDimension(DimensionId.OVERWORLD);
+    void dimensionChangeDropsOldDimensionsBoxes() {
+        // Migrated: a dimension change no longer clears the whole holder — it drops the *old*
+        // dimension from the engine (so its diff can't bleed into the new level). The overlay then
+        // has no boxes for the now-active dimension, so nothing renders until a fresh push lands.
+        OverlayClientState state = seededState(sampleLevel());
         feedAll(state, payload(), 16, 0L);
-        assertFalse(state.current() == null, "sanity: overlay held before dimension change");
+        state.tickEngine(64);
+        assertFalse(state.current().boxes(DimensionId.OVERWORLD).isEmpty(),
+                "sanity: overworld boxes computed before dimension change");
 
         state.setActiveDimension(DimensionId.THE_NETHER);
 
-        assertNull(state.current(), "changing dimension auto-clears the held overlay");
-        assertFalse(state.isVisible());
+        assertTrue(state.current().boxes(DimensionId.OVERWORLD).isEmpty(),
+                "the old dimension's boxes are dropped on dimension change");
+        assertFalse(state.shouldRender(), "nothing to draw in the new dimension yet");
         assertEquals(DimensionId.THE_NETHER, state.activeDimension());
     }
 
     @Test
-    void sameDimensionDoesNotClear() {
-        OverlayClientState state = new OverlayClientState();
-        state.setActiveDimension(DimensionId.OVERWORLD);
+    void sameDimensionDoesNotDrop() {
+        OverlayClientState state = seededState(sampleLevel());
         feedAll(state, payload(), 16, 0L);
+        state.tickEngine(64);
 
         state.setActiveDimension(DimensionId.OVERWORLD);
 
-        assertSame(state.current(), state.current());
-        assertFalse(state.current() == null, "re-setting the same dimension keeps the overlay");
+        assertFalse(state.current().boxes(DimensionId.OVERWORLD).isEmpty(),
+                "re-setting the same dimension keeps the computed overlay");
     }
 
     @Test
@@ -250,15 +321,16 @@ class OverlayClientStateTest {
         // Spec C batch 2 §2.2/§2.3: a dimension change clears the held overlay (a diff for one
         // dimension must not bleed into another), but the subscription stays live — the server
         // recomputes for the new level and pushes a fresh overlay; no UNSUB is sent.
-        OverlayClientState state = new OverlayClientState();
+        OverlayClientState state = seededState(sampleLevel());
         RecordingSender sender = new RecordingSender();
         state.toggleSubscription(sender);
-        state.setActiveDimension(DimensionId.OVERWORLD);
         feedAll(state, payload(), 16, 0L);
+        state.tickEngine(64);
 
         state.setActiveDimension(DimensionId.THE_NETHER);
 
-        assertNull(state.current(), "the held overlay is cleared on dimension change");
+        assertTrue(state.current().boxes(DimensionId.OVERWORLD).isEmpty(),
+                "the old dimension's boxes are dropped on dimension change");
         assertTrue(state.isSubscribed(), "but the subscription stays live (no UNSUB)");
         assertEquals(Arrays.asList(DiffControl.SUBSCRIBE), sender.sent, "no extra control sent");
     }
@@ -280,11 +352,11 @@ class OverlayClientStateTest {
     void overlayDoesNotSelfExpireWhileSubscribed() {
         // Auto-expire is retired from the live model (issue #92): a held overlay is never dropped by
         // the passage of time — only toggle-off, disconnect, or dimension change clear it.
-        OverlayClientState state = new OverlayClientState();
+        OverlayClientState state = seededState(sampleLevel());
         RecordingSender sender = new RecordingSender();
-        state.setActiveDimension(DimensionId.OVERWORLD);
         state.toggleSubscription(sender);
         feedAll(state, payload(), 16, 0L);
+        state.tickEngine(64);
 
         // No tick clock to advance, no expiry call — the overlay simply stays.
         assertFalse(state.current() == null, "overlay survives indefinitely while subscribed");
@@ -295,28 +367,29 @@ class OverlayClientStateTest {
 
     @Test
     void shouldRenderRequiresVisibleHeldMatchingDimension() {
-        OverlayClientState state = new OverlayClientState();
+        OverlayClientState state = seededState(sampleLevel());
         RecordingSender sender = new RecordingSender();
-        state.setActiveDimension(DimensionId.OVERWORLD);
         state.toggleSubscription(sender);
         feedAll(state, payload(), 16, 0L);
+        state.tickEngine(64);
 
         assertTrue(state.shouldRender(), "visible, held, dimension matches");
 
-        state.toggleSubscription(sender);   // UNSUB clears the overlay
+        state.toggleSubscription(sender);   // UNSUB resets the engine
         assertFalse(state.shouldRender(), "unsubscribed → nothing to draw");
     }
 
     @Test
     void shouldRenderFalseWhenDimensionHasNoBoxes() {
-        OverlayClientState state = new OverlayClientState();
-        state.setActiveDimension(DimensionId.OVERWORLD);
+        OverlayClientState state = seededState(sampleLevel());
         feedAll(state, payload(), 16, 0L);
-        // Move to a dimension the overlay has no changes for: setActiveDimension clears, so re-receive
-        // would be needed; here we assert the cleared state simply does not render.
+        state.tickEngine(64);
+        assertTrue(state.shouldRender(), "sanity: overworld boxes render");
+        // Move to a dimension the overlay has no boxes for: setActiveDimension drops the old dim, so a
+        // re-push would be needed; here we assert the computed overlay has nothing for the new dim.
         state.setActiveDimension(DimensionId.THE_END);
 
-        assertFalse(state.shouldRender(), "no overlay after dimension change → nothing to draw");
+        assertFalse(state.shouldRender(), "no boxes for the active dimension → nothing to draw");
     }
 
     @Test
