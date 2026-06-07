@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +47,53 @@ class ClientDiffEngineTest {
 
     private static int totalBoxes(OverlayState state) {
         return state == null ? 0 : state.boxes(DIM).size();
+    }
+
+    /** A real "world == HEAD" push: NO dimensions at all (not an empty per-chunk list). */
+    private static WorldDiff emptyDiff() {
+        return new WorldDiff(Collections.<DimensionId, List<ChunkDiff>>emptyMap(), 0, 0, 0);
+    }
+
+    @Test
+    void emptyDiffStillSeedsCurrentDimensionsLoadedChunks() {
+        // Regression (Forge SP "whole chunk shows +"): a world==HEAD diff carries no dimensions,
+        // but the current dimension's loaded chunks must still get a frozen HEAD baseline — else
+        // every solid block reads as an addition the moment its section is marked dirty.
+        FakeLevelAccess level = world();
+        level.setBlock(1, 5, 1, STONE); // existing terrain == HEAD (clean)
+        level.setBlock(2, 5, 2, STONE);
+        ClientDiffEngine engine = new ClientDiffEngine(256, () -> level);
+
+        engine.onServerDiff(emptyDiff());
+        engine.tick(64);
+        assertEquals(0, totalBoxes(engine.currentOverlay())); // terrain matches HEAD → no boxes
+
+        // Place ONE new block; only it should diff, NOT the whole section's terrain.
+        level.setBlock(3, 5, 3, DIRT);
+        engine.onBlockChange(DIM, 3, 5, 3);
+        engine.tick(64);
+        assertEquals(1, totalBoxes(engine.currentOverlay())); // exactly one box, not the whole chunk
+    }
+
+    @Test
+    void emptyHeadMoveDiffClearsStaleBoxes() {
+        // Regression ("commit while overlay open does not reset"): the post-commit push is an
+        // empty (no-dimension) diff and must still drop+reseed the current dimension.
+        FakeLevelAccess level = world();
+        level.setBlock(1, 5, 1, STONE);
+        ClientDiffEngine engine = new ClientDiffEngine(256, () -> level);
+        engine.onServerDiff(emptyDiff());
+        engine.tick(64);
+
+        level.setBlock(1, 5, 1, DIRT); // uncommitted edit → one box
+        engine.onBlockChange(DIM, 1, 5, 1);
+        engine.tick(64);
+        assertEquals(1, totalBoxes(engine.currentOverlay()));
+
+        // Commit: working now == HEAD (DIRT). Server re-pushes an empty diff → must reseed → clear.
+        engine.onServerDiff(emptyDiff());
+        engine.tick(64);
+        assertEquals(0, totalBoxes(engine.currentOverlay()));
     }
 
     @Test

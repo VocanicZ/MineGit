@@ -4,8 +4,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 import net.rainbowcreation.vocanicz.minegit.core.model.BlockChange;
 import net.rainbowcreation.vocanicz.minegit.core.model.ChunkDiff;
@@ -57,25 +59,42 @@ public final class ClientDiffEngine {
     public void onServerDiff(WorldDiff diff) {
         diffReceived = true;
         LevelAccess level = levelSupplier.get();
-        for (Map.Entry<DimensionId, List<ChunkDiff>> dimEntry : diff.getDimensions().entrySet()) {
-            DimensionId dim = dimEntry.getKey();
+
+        // Dimensions to reset + re-index: those carried by the diff, PLUS the current client
+        // dimension. A "world == HEAD" push carries NO dimensions, yet the current dimension's
+        // loaded chunks still need a frozen HEAD baseline — without it every solid block reads as
+        // an addition the moment its section is marked dirty (and a post-commit empty push would
+        // never clear stale boxes).
+        DimensionId current = level == null ? null : level.dimension();
+        Set<DimensionId> dims = new LinkedHashSet<DimensionId>(diff.getDimensions().keySet());
+        if (current != null) {
+            dims.add(current);
+        }
+
+        for (DimensionId dim : dims) {
             cache.dropDimension(dim);
             tracker.dropDimension(dim);
             accumulator.keySet().removeIf(s -> s.dimension().equals(dim));
 
             Map<ChunkPos, List<BlockChange>> byChunk = new HashMap<ChunkPos, List<BlockChange>>();
-            for (ChunkDiff chunkDiff : dimEntry.getValue()) {
-                byChunk.put(chunkDiff.getPos(), chunkDiff.getChanges());
+            List<ChunkDiff> chunkDiffs = diff.getDimensions().get(dim);
+            if (chunkDiffs != null) {
+                for (ChunkDiff chunkDiff : chunkDiffs) {
+                    byChunk.put(chunkDiff.getPos(), chunkDiff.getChanges());
+                }
             }
             heldDiff.put(dim, byChunk);
+        }
 
-            if (level == null) {
-                continue;
-            }
+        // Seed the loaded chunks of the CURRENT dimension only — that is the one live world we can
+        // read. Other dimensions carried by the diff are seeded when the player enters them and
+        // their chunks load (onChunkLoad), against the held diff recorded above.
+        if (level != null && current != null) {
+            Map<ChunkPos, List<BlockChange>> byChunk = heldDiff.get(current);
             for (ChunkPos pos : level.loadedChunks()) {
                 List<BlockChange> changes = byChunk.get(pos);
-                seedChunk(dim, pos, changes == null ? Collections.<BlockChange>emptyList() : changes,
-                        level);
+                seedChunk(current, pos, changes == null ? Collections.<BlockChange>emptyList()
+                        : changes, level);
             }
         }
         rebuildOverlay();
