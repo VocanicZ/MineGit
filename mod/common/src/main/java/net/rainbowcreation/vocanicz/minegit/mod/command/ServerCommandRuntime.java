@@ -6,6 +6,7 @@ import net.rainbowcreation.vocanicz.minegit.core.git.Author;
 import net.rainbowcreation.vocanicz.minegit.core.git.CommitInfo;
 import net.rainbowcreation.vocanicz.minegit.core.git.UnknownRefException;
 import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
+import net.rainbowcreation.vocanicz.minegit.mod.command.permission.MineGitPermissions;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffOverlaySender;
 import net.rainbowcreation.vocanicz.minegit.mod.net.LiveSubscriptionLoop;
 import net.rainbowcreation.vocanicz.minegit.protocol.DiffControl;
@@ -99,9 +100,18 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
      * does so before it reaches here.
      */
     public ServerCommandRuntime(Clock clock, Executor background, int liveRefreshTicks) {
+        this(clock, background, new LiveSubscriptionLoop(liveRefreshTicks, DiffOverlaySender.channelSink()));
+    }
+
+    /**
+     * Test seam: inject the {@link LiveSubscriptionLoop} directly (e.g. a recording fake that captures
+     * {@code subscribe}/{@code unsubscribe} calls without touching the real channel). Package-private so
+     * production code never uses it; only {@code ServerCommandRuntimeOnControlTest} in the same package.
+     */
+    ServerCommandRuntime(Clock clock, Executor background, LiveSubscriptionLoop live) {
         this.clock = clock;
         this.background = background;
-        this.live = new LiveSubscriptionLoop(liveRefreshTicks, DiffOverlaySender.channelSink());
+        this.live = live;
     }
 
     /** The live-overlay push cadence in server ticks this runtime drives (issue #94). */
@@ -132,15 +142,39 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
      * {@link net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlChannel#setServerHandler}): a
      * {@code SUBSCRIBE} registers the player and immediately pushes the current working-vs-HEAD for
      * their level; an {@code UNSUBSCRIBE} clears the subscription.
+     *
+     * <p>{@code SUBSCRIBE} is gated on {@code minegit.use} (or vanilla op level 2) via
+     * {@link MineGitPermissions}: an unpermitted SUBSCRIBE is silently ignored — no subscribe, no push.
+     * {@code UNSUBSCRIBE} is never gated: a client must always be able to drop its subscription.
      */
     public void onControl(ServerPlayer player, DiffControl control) {
         if (player == null) {
             return;
         }
+        boolean permitted = MineGitPermissions
+                .require(Subcommand.DIFF.node(), Subcommand.DIFF.permissionLevel())
+                .test(player.createCommandSourceStack());
+        onControlInner(player.getUUID(), player, control, permitted, currentDiffFor(player));
+    }
+
+    /**
+     * Package-private seam for {@code ServerCommandRuntimeOnControlTest}: accepts all decisions and
+     * data already resolved from the player, so tests need no real {@link ServerPlayer} or
+     * {@link CommandSourceStack}. The production {@link #onControl(ServerPlayer, DiffControl)} resolves
+     * these from the live player; tests supply arbitrary UUIDs, a pre-decided {@code permitted} flag,
+     * and a null diff (no bound repo). The {@code player} argument here is forwarded verbatim to
+     * {@link LiveSubscriptionLoop#subscribe} — pass {@code null} in tests (the loop only uses it for
+     * the overlay push, which is a no-op when the recording sink's {@code canSend} returns false).
+     */
+    void onControlInner(UUID id, ServerPlayer player, DiffControl control,
+            boolean permitted, WorldDiff currentDiff) {
         if (control == DiffControl.SUBSCRIBE) {
-            live.subscribe(player, player.getUUID(), currentDiffFor(player));
+            if (!permitted) {
+                return; // unpermitted SUBSCRIBE silently ignored — no subscribe, no push
+            }
+            live.subscribe(player, id, currentDiff);
         } else if (control == DiffControl.UNSUBSCRIBE) {
-            live.unsubscribe(player.getUUID());
+            live.unsubscribe(id); // UNSUBSCRIBE is never gated
         }
     }
 
