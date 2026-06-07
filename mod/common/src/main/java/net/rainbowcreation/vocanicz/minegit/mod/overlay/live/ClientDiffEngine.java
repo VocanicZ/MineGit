@@ -28,6 +28,9 @@ import net.rainbowcreation.vocanicz.minegit.mod.world.LevelAccess;
  */
 public final class ClientDiffEngine {
 
+    /** Chunks seeded per {@link #tick} — caps the per-tick HEAD-baseline scan so a burst can't freeze a frame. */
+    private static final int SEED_BUDGET = 4;
+
     private final HeadBaselineCache cache;
     private final DirtySectionTracker tracker = new DirtySectionTracker();
     private final LiveDiffer differ = new LiveDiffer();
@@ -51,10 +54,11 @@ public final class ClientDiffEngine {
 
     /**
      * Seed/reset path. For each dimension in {@code diff}: drop that dimension's
-     * baselines/tracker-entries/accumulator-entries (HEAD-move reset semantics), index its chunk
-     * changes, and — if a level is available — seed every currently-loaded chunk of that dimension
-     * against its changes (clean chunks seed with empty changes so their HEAD is captured), marking
-     * each seeded chunk dirty. Marks {@code diffReceived} and rebuilds the overlay.
+     * baselines/tracker-entries/accumulator-entries (HEAD-move reset semantics) and index its chunk
+     * changes for later seeding. Does NOT seed synchronously — bursting a frozen HEAD baseline for
+     * the whole loaded set scans ~98k blocks/chunk and would freeze the subscribe-time frame; the
+     * budgeted {@link #tick} seeds the near chunks incrementally instead. Marks {@code diffReceived}
+     * and rebuilds the overlay.
      */
     public void onServerDiff(WorldDiff diff) {
         diffReceived = true;
@@ -86,37 +90,17 @@ public final class ClientDiffEngine {
             heldDiff.put(dim, byChunk);
         }
 
-        // Seed the loaded chunks of the CURRENT dimension only — that is the one live world we can
-        // read. Other dimensions carried by the diff are seeded when the player enters them and
-        // their chunks load (onChunkLoad), against the held diff recorded above.
-        if (level != null && current != null) {
-            Map<ChunkPos, List<BlockChange>> byChunk = heldDiff.get(current);
-            for (ChunkPos pos : level.loadedChunks()) {
-                List<BlockChange> changes = byChunk.get(pos);
-                seedChunk(current, pos, changes == null ? Collections.<BlockChange>emptyList()
-                        : changes, level);
-            }
-        }
         rebuildOverlay();
     }
 
     /**
-     * A chunk just loaded. If a diff has been received, seed this chunk against the held diff's
-     * changes for it (empty if none) and mark it dirty, then rebuild. If no diff yet, ignore — the
-     * eventual {@link #onServerDiff} seeds all loaded chunks.
+     * No-op. Per-chunk-load seeding is retired: the budgeted tick-poll over the bounded
+     * {@link LevelAccess#loadedChunks()} (see {@link #tick}) catches chunks entering the overlay
+     * radius as the player moves, while seeding render-edge chunks here would re-thrash the bounded
+     * HeadBaselineCache. The signature is kept because the client wiring still calls it.
      */
     public void onChunkLoad(DimensionId dim, ChunkPos pos) {
-        if (!diffReceived) {
-            return;
-        }
-        LevelAccess level = levelSupplier.get();
-        if (level == null) {
-            return;
-        }
-        Map<ChunkPos, List<BlockChange>> byChunk = heldDiff.get(dim);
-        List<BlockChange> changes = byChunk == null ? null : byChunk.get(pos);
-        seedChunk(dim, pos, changes == null ? Collections.<BlockChange>emptyList() : changes, level);
-        rebuildOverlay();
+        // intentionally empty — superseded by the budgeted tick-poll over bounded loadedChunks().
     }
 
     private void seedChunk(
@@ -131,9 +115,10 @@ public final class ClientDiffEngine {
     }
 
     /**
-     * Pop up to {@code sectionBudget} dirty sections, re-diff each against the frozen HEAD, replace
-     * its accumulator entry (removing it when empty), and rebuild the overlay. No-ops before the
-     * first diff or when no level is available.
+     * Seed up to {@link #SEED_BUDGET} not-yet-cached chunks among the (bounded) loaded set against
+     * the held diff, then pop up to {@code sectionBudget} dirty sections, re-diff each against the
+     * frozen HEAD, replace its accumulator entry (removing it when empty), and rebuild the overlay.
+     * No-ops before the first diff or when no level is available.
      */
     public void tick(int sectionBudget) {
         if (!diffReceived) {
@@ -143,8 +128,10 @@ public final class ClientDiffEngine {
         if (level == null) {
             return;
         }
+        seedMissingLoadedChunks(level, SEED_BUDGET);
         List<DirtySectionTracker.Section> batch = tracker.popBudget(sectionBudget);
         if (batch.isEmpty()) {
+            rebuildOverlay();
             return;
         }
         for (DirtySectionTracker.Section section : batch) {
@@ -156,6 +143,29 @@ public final class ClientDiffEngine {
             }
         }
         rebuildOverlay();
+    }
+
+    /**
+     * Seed up to {@code budget} of the current dimension's loaded chunks that have no frozen HEAD
+     * baseline yet, using the held diff for that chunk (empty list if clean). Each seeded chunk is
+     * marked dirty by {@link #seedChunk} so it is diffed by this or a later {@link #tick}.
+     */
+    private int seedMissingLoadedChunks(LevelAccess level, int budget) {
+        DimensionId dim = level.dimension();
+        Map<ChunkPos, List<BlockChange>> byChunk = heldDiff.get(dim);
+        int seeded = 0;
+        for (ChunkPos pos : level.loadedChunks()) {
+            if (seeded >= budget) {
+                break;
+            }
+            if (cache.hasChunk(dim, pos)) {
+                continue;
+            }
+            List<BlockChange> ch = byChunk == null ? null : byChunk.get(pos);
+            seedChunk(dim, pos, ch == null ? Collections.<BlockChange>emptyList() : ch, level);
+            seeded++;
+        }
+        return seeded;
     }
 
     /** The overlay the renderer reads, or {@code null} before the first diff / after {@link #reset}. */

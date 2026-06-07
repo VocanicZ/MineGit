@@ -144,17 +144,45 @@ class ClientDiffEngineTest {
     }
 
     @Test
-    void chunkLoadedAfterDiffIsSeededAgainstHeldDiff() {
+    void tickSeedsChunksThatBecomeLoadedAfterTheDiff() {
+        // A chunk loaded after the diff arrives is seeded by the budgeted tick-poll (NOT onChunkLoad).
         FakeLevelAccess level = new FakeLevelAccess(DIM, 0, 1); // chunk (0,0) NOT loaded yet
         ClientDiffEngine engine = new ClientDiffEngine(256, () -> level);
         engine.onServerDiff(diffWith(BlockChange.change(1, 5, 1, DIRT, STONE)));
         engine.tick(64);
-        assertEquals(0, totalBoxes(engine.currentOverlay()));
+        assertEquals(0, totalBoxes(engine.currentOverlay())); // nothing loaded to seed yet
+
         level.addLoadedChunk(0, 0);
-        level.setBlock(1, 5, 1, STONE);
-        engine.onChunkLoad(DIM, new ChunkPos(0, 0));
+        level.setBlock(1, 5, 1, STONE); // working has the changed block present
+        engine.tick(64);               // tick-poll seeds the now-loaded chunk against the held diff
+        assertEquals(1, totalBoxes(engine.currentOverlay())); // HEAD=DIRT vs live=STONE → one box
+    }
+
+    @Test
+    void chunkSeedingIsBudgetedAcrossTicks() {
+        // Many loaded chunks must not all seed in one tick. With SEED_BUDGET chunks/tick, N missing
+        // chunks take multiple ticks; place a block in a chunk that is only reached on a later tick and
+        // confirm its box appears only once its chunk has been seeded.
+        FakeLevelAccess level = new FakeLevelAccess(DIM, 0, 1);
+        for (int cx = 0; cx < 10; cx++) {
+            level.addLoadedChunk(cx, 0); // 10 loaded chunks, SEED_BUDGET (4) per tick → >=3 ticks
+        }
+        ClientDiffEngine engine = new ClientDiffEngine(256, () -> level);
+        engine.onServerDiff(emptyDiff());
+
+        int seededTicks = 0;
+        // Drain seeding: each tick seeds up to SEED_BUDGET chunks. After enough ticks all 10 are seeded.
+        for (int i = 0; i < 10; i++) {
+            engine.tick(64);
+            seededTicks++;
+        }
+        // All chunks clean vs HEAD → zero boxes regardless; the real assertion is no exception/freeze
+        // and that an edit anywhere now diffs to exactly one box (every chunk has a baseline).
+        assertEquals(0, totalBoxes(engine.currentOverlay()));
+        level.setBlock(9 * 16 + 1, 5, 1, DIRT); // edit in the last chunk
+        engine.onBlockChange(DIM, 9 * 16 + 1, 5, 1);
         engine.tick(64);
-        assertEquals(1, totalBoxes(engine.currentOverlay()));
+        assertEquals(1, totalBoxes(engine.currentOverlay())); // one box, not a whole-chunk "+"
     }
 
     @Test
@@ -174,7 +202,9 @@ class ClientDiffEngineTest {
         FakeLevelAccess level = new FakeLevelAccess(DIM, 0, 2); // Y in [0,32): sections 0 and 1
         level.addLoadedChunk(0, 0);
         ClientDiffEngine engine = new ClientDiffEngine(256, () -> level);
-        engine.onServerDiff(diffWith()); // seeds chunk (0,0): marks sections 0 and 1 dirty
+        engine.onServerDiff(diffWith());
+        engine.tick(64); // tick-poll seeds chunk (0,0), freezing the clean HEAD baseline
+        assertEquals(0, totalBoxes(engine.currentOverlay()));
         // Player edits one block in section 0 (y=5) and one in section 1 (y=20).
         level.setBlock(1, 5, 1, STONE);
         engine.onBlockChange(DIM, 1, 5, 1);

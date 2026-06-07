@@ -68,15 +68,30 @@ public final class ClientWorldLevelAccess implements LevelAccess {
             return out; // no player → no anchor for the loaded square
         }
         net.minecraft.world.level.ChunkPos center = Minecraft.getInstance().player.chunkPosition();
-        // The client cache exposes no public iterator, so probe a square of the effective render
-        // distance around the player and keep the chunks that are actually loaded + non-empty.
-        int radius = Math.max(2, Minecraft.getInstance().options.getEffectiveRenderDistance());
+        // The client cache exposes no public iterator, so probe a square around the player and keep
+        // the chunks that are actually loaded + non-empty. Bound the square to the SMALLER of the
+        // render distance and the overlay radius (the box-cull distance) — baselining the full client
+        // render distance overflows the bounded HeadBaselineCache and evicts the player's own chunk.
+        int radius = Math.min(
+                Math.max(2, Minecraft.getInstance().options.getEffectiveRenderDistance()),
+                overlayChunkRadius());
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
                 addIfLoaded(out, center.x + dx, center.z + dz);
             }
         }
         return out;
+    }
+
+    /**
+     * Chunk radius the overlay baselines around the player — tied to the box cull distance, not the
+     * full client render distance, so the baseline working set stays small (and never evicts the
+     * player's own vicinity from the bounded HeadBaselineCache). +1 chunk margin past the cull radius.
+     */
+    static int overlayChunkRadius() {
+        double blocks = net.rainbowcreation.vocanicz.minegit.mod.overlay.OverlayClientHooks.config()
+                .getMaxRenderDistance();
+        return Math.max(2, (int) Math.ceil(blocks / 16.0) + 1);
     }
 
     @Override
