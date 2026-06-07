@@ -94,9 +94,6 @@ public final class OverlayConfigFile {
         sb.append("# Overlay auto-clear timeout in seconds; 0 disables the timer.\n");
         sb.append("autoExpireSeconds=").append(d.getAutoExpireSeconds()).append("\n");
         sb.append("\n");
-        sb.append("# Server live-overlay push cadence in server ticks; clamped to >= 1 (default 10).\n");
-        sb.append("liveRefreshTicks=").append(d.getLiveRefreshTicks()).append("\n");
-        sb.append("\n");
         sb.append("# HUD anchor: top-left | top-right | bottom-left | bottom-right.\n");
         sb.append("hudCorner=").append(d.getHudCorner().name().toLowerCase().replace('_', '-')).append("\n");
         return sb.toString();

@@ -54,7 +54,6 @@ class OverlayConfigFileTest {
         assertEquals(OverlayConfig.DEFAULT_AUTO_EXPIRE_SECONDS, reloaded.getAutoExpireSeconds());
         assertEquals(OverlayConfig.DEFAULT_MAX_RENDER_DISTANCE, reloaded.getMaxRenderDistance());
         assertEquals(OverlayConfig.DEFAULT_KEYBIND, reloaded.getKeybind());
-        assertEquals(OverlayConfig.DEFAULT_LIVE_REFRESH_TICKS, reloaded.getLiveRefreshTicks());
         assertEquals(OverlayConfig.DEFAULT_HUD_CORNER, reloaded.getHudCorner());
     }
 

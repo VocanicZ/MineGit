@@ -1,6 +1,7 @@
 package net.rainbowcreation.vocanicz.minegit.mod.neoforge;
 
 import net.rainbowcreation.vocanicz.minegit.mod.MineGitInfo;
+import net.rainbowcreation.vocanicz.minegit.mod.command.LiveOverlayRetiredLoopGameTest;
 import net.rainbowcreation.vocanicz.minegit.mod.gametest.MineGitGameTestLogic;
 import com.mojang.serialization.MapCodec;
 import java.util.Arrays;
@@ -76,6 +77,8 @@ public final class MineGitNeoForgeGameTest {
                 MineGitGameTestLogic::controlPacketRoundTripsToServerHandler);
         registerTest(event, env, "live_subscription_pushes_on_change_then_stops_on_unsubscribe",
                 MineGitGameTestLogic::liveSubscriptionPushesOnChangeThenStopsOnUnsubscribe);
+        registerTest(event, env, "live_overlay_ticks_push_nothing_on_real_server",
+                LiveOverlayRetiredLoopGameTest::ticksPushNothingOnRealServer);
     }
 
     private static void registerTest(

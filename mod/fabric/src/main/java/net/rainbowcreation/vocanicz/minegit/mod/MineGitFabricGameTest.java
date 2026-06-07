@@ -1,5 +1,6 @@
 package net.rainbowcreation.vocanicz.minegit.mod;
 
+import net.rainbowcreation.vocanicz.minegit.mod.command.LiveOverlayRetiredLoopGameTest;
 import net.rainbowcreation.vocanicz.minegit.mod.gametest.MineGitGameTestLogic;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -50,5 +51,10 @@ public final class MineGitFabricGameTest {
     @GameTest(maxTicks = 200)
     public void liveSubscriptionPushesOnChangeThenStopsOnUnsubscribe(GameTestHelper helper) {
         MineGitGameTestLogic.liveSubscriptionPushesOnChangeThenStopsOnUnsubscribe(helper);
+    }
+
+    @GameTest(maxTicks = 200)
+    public void liveOverlayTicksPushNothingOnRealServer(GameTestHelper helper) {
+        LiveOverlayRetiredLoopGameTest.ticksPushNothingOnRealServer(helper);
     }
 }
