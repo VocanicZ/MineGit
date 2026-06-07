@@ -5,6 +5,8 @@ import net.rainbowcreation.vocanicz.minegit.mod.MineGitMod;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.server.permission.events.PermissionGatherEvent;
 
 /**
  * NeoForge loader entrypoint — declared in {@code neoforge.mods.toml}. Delegates to shared init.
@@ -17,6 +19,11 @@ import net.neoforged.fml.common.Mod;
 public final class MineGitNeoForge {
 
     public MineGitNeoForge(IEventBus modEventBus, Dist dist) {
+        // Install the permission checker + register the node-gather listener BEFORE shared init, so the
+        // /minegit gates resolve through PermissionAPI from the first command registration (parity 2026-06-07).
+        MineGitNeoForgePermissions.install();
+        NeoForge.EVENT_BUS.addListener(
+                PermissionGatherEvent.Nodes.class, MineGitNeoForgePermissions::onGatherNodes);
         MineGitMod.init();
         // Register the minegit:diff opaque-byte payload (type + S2C handler) on the mod bus (issue #77).
         MineGitNeoForgeNetworking.register(modEventBus);
