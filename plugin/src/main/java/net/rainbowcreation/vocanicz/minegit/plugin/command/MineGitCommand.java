@@ -11,6 +11,7 @@ import net.rainbowcreation.vocanicz.minegit.core.git.WorkingTreeDirtyException;
 import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
 import net.rainbowcreation.vocanicz.minegit.plugin.net.DiffPush;
 import net.rainbowcreation.vocanicz.minegit.plugin.net.DiffSubscriptions;
+import net.rainbowcreation.vocanicz.minegit.protocol.Protocol;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.Actor;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CommitService;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import org.bukkit.Bukkit;
@@ -257,17 +259,44 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
             WorldDiff diff = workingTreeDiff(repo, adapter, name);
             DiffPush.push(plugin, player, diff);
         } catch (RuntimeException e) {
-            plugin.getLogger().warning("diff overlay push failed for '" + name + "': " + e.getMessage());
+            plugin.getLogger().warning("diff overlay push failed for '" + name + "': " + e);
         }
     }
 
     /** Re-push the current working-vs-HEAD to every subscriber currently in the named world. */
     public void repushSubscribersIn(String worldName) {
-        for (UUID id : subs.snapshot()) {
+        if (!repos.isBound(worldName)) {
+            return;
+        }
+        Set<UUID> ids = subs.snapshot();
+        if (ids.isEmpty()) {
+            return;
+        }
+        World world = Bukkit.getWorld(worldName);
+        if (world == null) {
+            return;
+        }
+        List<Player> targets = new ArrayList<Player>();
+        for (UUID id : ids) {
             Player p = Bukkit.getPlayer(id);
             if (p != null && p.getWorld().getName().equals(worldName)) {
-                pushCurrentDiff(p);
+                targets.add(p);
             }
+        }
+        if (targets.isEmpty()) {
+            return;
+        }
+        WorldAdapter adapter = adapters.apply(world);
+        try (MineGitRepo repo = MineGitRepo.open(repos.repoPath(worldName), adapter, clock)) {
+            WorldDiff diff = workingTreeDiff(repo, adapter, worldName);
+            List<byte[]> frames = DiffPush.frames(diff);
+            for (Player p : targets) {
+                for (byte[] frame : frames) {
+                    p.sendPluginMessage(plugin, Protocol.DIFF_CHANNEL, frame);
+                }
+            }
+        } catch (RuntimeException e) {
+            plugin.getLogger().warning("diff overlay re-push failed for '" + worldName + "': " + e);
         }
     }
 
