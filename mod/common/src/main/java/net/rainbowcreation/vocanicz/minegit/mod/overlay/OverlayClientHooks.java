@@ -12,6 +12,7 @@ import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
 
 import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffChannel;
@@ -102,8 +103,23 @@ public final class OverlayClientHooks {
 
         if (toggleKey != null) {
             while (toggleKey.consumeClick()) {
+                // Only toggle when the server negotiated minegit:diffsub. On a plugin/vanilla server
+                // the channel is absent — sending would throw (NeoForge) and crash the client, so
+                // instead tell the player the overlay isn't available here and leave state untouched.
+                if (!DiffControlChannel.canSendToServer()) {
+                    notifyOverlayUnsupported(client);
+                    continue;
+                }
                 OverlayClientState.CLIENT.toggleSubscription(CONTROL_SENDER);
             }
+        }
+    }
+
+    /** Actionbar note when the keybind is pressed on a server that doesn't speak {@code minegit:diffsub}. */
+    private static void notifyOverlayUnsupported(Minecraft client) {
+        if (client.player != null) {
+            client.player.displayClientMessage(
+                    Component.literal("[MineGit] Live diff overlay isn't available on this server."), true);
         }
     }
 }

@@ -105,17 +105,19 @@ public final class OverlayClientState {
      */
     public DiffControl toggleSubscription(ControlSender sender) {
         Objects.requireNonNull(sender, "sender");
-        DiffControl control;
+        // Send BEFORE mutating local state. A server that doesn't speak minegit:diffsub makes the
+        // loader send throw (NeoForge's checkPacket rejects an unnegotiated channel); sending first
+        // means such a throw leaves the subscription flags untouched and honest, never half-toggled
+        // into a state where the client believes it is subscribed to a server that got nothing.
+        DiffControl control = subscribed ? DiffControl.UNSUBSCRIBE : DiffControl.SUBSCRIBE;
+        sender.send(control);
         if (subscribed) {
             subscribed = false;
             clear();
-            control = DiffControl.UNSUBSCRIBE;
         } else {
             subscribed = true;
             visible = true;
-            control = DiffControl.SUBSCRIBE;
         }
-        sender.send(control);
         return control;
     }
 

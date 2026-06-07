@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -181,6 +182,39 @@ class OverlayClientStateTest {
                 Arrays.asList(DiffControl.SUBSCRIBE, DiffControl.UNSUBSCRIBE, DiffControl.SUBSCRIBE),
                 sender.sent);
         assertTrue(state.isSubscribed(), "odd number of presses leaves it subscribed");
+    }
+
+    @Test
+    void failedSubscribeSendLeavesClientUnsubscribed() {
+        // On a server that doesn't speak minegit:diffsub (plugin/vanilla), the loader send throws
+        // (NeoForge's checkPacket: "Payload minegit:diffsub may not be sent to the server!"). The
+        // toggle sends BEFORE mutating, so a throw leaves the subscription honest — the client is not
+        // marked subscribed to a server that never received the SUBSCRIBE.
+        OverlayClientState state = new OverlayClientState();
+        OverlayClientState.ControlSender boom = c -> {
+            throw new IllegalStateException("channel not negotiated");
+        };
+
+        assertThrows(IllegalStateException.class, () -> state.toggleSubscription(boom));
+
+        assertFalse(state.isSubscribed(), "a failed SUBSCRIBE send leaves the client unsubscribed");
+        assertFalse(state.isVisible(), "and nothing made visible");
+    }
+
+    @Test
+    void failedUnsubscribeSendKeepsSubscriptionAndOverlay() {
+        OverlayClientState state = new OverlayClientState();
+        RecordingSender ok = new RecordingSender();
+        state.toggleSubscription(ok);                 // SUBSCRIBE lands
+        feedAll(state, payload(), 16, 0L);             // overlay held
+        OverlayClientState.ControlSender boom = c -> {
+            throw new IllegalStateException("connection gone");
+        };
+
+        assertThrows(IllegalStateException.class, () -> state.toggleSubscription(boom));
+
+        assertTrue(state.isSubscribed(), "a failed UNSUBSCRIBE leaves the subscription live");
+        assertFalse(state.current() == null, "overlay not cleared when the UNSUB never reached the server");
     }
 
     // ---- lifecycle: dimension change, disconnect (no auto-expire) ------------------------------

@@ -94,4 +94,17 @@ public final class DiffControlChannel {
     public static void sendToServer(byte[] controlBytes) {
         throw new AssertionError("@ExpectPlatform stub — replaced by DiffControlChannelImpl at build time");
     }
+
+    /**
+     * Whether the current server connection can receive a {@code minegit:diffsub} payload right now —
+     * i.e. the channel was negotiated at login. A plugin/vanilla server (or any non-MineGit server)
+     * negotiates nothing, so this returns {@code false} and the keybind must NOT call
+     * {@link #sendToServer}: NeoForge's strict packet check throws {@code UnsupportedOperationException}
+     * ("Payload minegit:diffsub may not be sent to the server!") on an unnegotiated send, which would
+     * crash the client. Returns {@code false} when no play connection is active.
+     */
+    @ExpectPlatform
+    public static boolean canSendToServer() {
+        throw new AssertionError("@ExpectPlatform stub — replaced by DiffControlChannelImpl at build time");
+    }
 }
