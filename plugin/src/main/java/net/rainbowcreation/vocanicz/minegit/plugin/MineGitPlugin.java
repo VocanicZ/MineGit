@@ -7,6 +7,9 @@ import net.rainbowcreation.vocanicz.minegit.plugin.command.MessageService;
 import net.rainbowcreation.vocanicz.minegit.plugin.command.MessageServices;
 import net.rainbowcreation.vocanicz.minegit.plugin.command.MineGitCommand;
 import net.rainbowcreation.vocanicz.minegit.plugin.listener.BlockChangeListener;
+import net.rainbowcreation.vocanicz.minegit.plugin.listener.DiffSubListener;
+import net.rainbowcreation.vocanicz.minegit.plugin.listener.DiffSubQuitListener;
+import net.rainbowcreation.vocanicz.minegit.plugin.net.DiffSubscriptions;
 import net.rainbowcreation.vocanicz.minegit.plugin.version.ServerVersion;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.AsyncExecutor;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.BukkitWorldAdapter;
@@ -17,9 +20,11 @@ import net.rainbowcreation.vocanicz.minegit.plugin.world.WorldDirtyRegistry;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.WorldRepoRegistry;
 import java.time.Clock;
 import java.util.concurrent.Executor;
+import net.rainbowcreation.vocanicz.minegit.protocol.Protocol;
 import org.bukkit.World;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.plugin.messaging.Messenger;
 
 /**
  * MineGit Spigot plugin entry point (Spec B §2).
@@ -40,6 +45,7 @@ public final class MineGitPlugin extends JavaPlugin {
     private CommitService commitService;
     private CheckoutService checkoutService;
     private MessageService messages;
+    private DiffSubscriptions subscriptions;
 
     @Override
     public void onEnable() {
@@ -74,9 +80,11 @@ public final class MineGitPlugin extends JavaPlugin {
 
     /** Wires the {@code /minegit} dispatcher (+ tab completer) onto the command declared in plugin.yml. */
     private void registerCommands() {
+        // Diff-overlay subscriber registry shared by the command (re-push) and the diffsub listener.
+        this.subscriptions = new DiffSubscriptions();
         MineGitCommand command = new MineGitCommand(
                 worldRepos, worldDirty, this::adapterFor, Clock.systemUTC(), messages, commitService,
-                checkoutService);
+                checkoutService, this, subscriptions);
         PluginCommand minegit = getCommand("minegit");
         if (minegit != null) {
             minegit.setExecutor(command);
@@ -84,6 +92,13 @@ public final class MineGitPlugin extends JavaPlugin {
         } else {
             getLogger().warning("Command 'minegit' missing from plugin.yml; commands disabled");
         }
+        // Diff-overlay transport: outgoing frames on minegit:diff, incoming SUBSCRIBE/UNSUBSCRIBE on
+        // minegit:diffsub, and a quit hook to drop stale subscriptions (Spec §2(d)(e)).
+        Messenger messenger = getServer().getMessenger();
+        messenger.registerOutgoingPluginChannel(this, Protocol.DIFF_CHANNEL);
+        messenger.registerIncomingPluginChannel(
+                this, Protocol.DIFF_CONTROL_CHANNEL, new DiffSubListener(subscriptions, command));
+        getServer().getPluginManager().registerEvents(new DiffSubQuitListener(subscriptions), this);
     }
 
     @Override

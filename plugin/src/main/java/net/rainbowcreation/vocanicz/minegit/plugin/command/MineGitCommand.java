@@ -9,6 +9,8 @@ import net.rainbowcreation.vocanicz.minegit.core.git.MineGitRepo;
 import net.rainbowcreation.vocanicz.minegit.core.git.UnknownRefException;
 import net.rainbowcreation.vocanicz.minegit.core.git.WorkingTreeDirtyException;
 import net.rainbowcreation.vocanicz.minegit.core.model.WorldDiff;
+import net.rainbowcreation.vocanicz.minegit.plugin.net.DiffPush;
+import net.rainbowcreation.vocanicz.minegit.plugin.net.DiffSubscriptions;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.Actor;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CommitService;
@@ -22,9 +24,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.function.Function;
+import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.World;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -76,6 +81,8 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
     private final MessageService messages;
     private final CommitService commitService;
     private final CheckoutService checkoutService;
+    private final Plugin plugin;
+    private final DiffSubscriptions subs;
 
     public MineGitCommand(
             WorldRepoRegistry repos,
@@ -84,7 +91,9 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
             Clock clock,
             MessageService messages,
             CommitService commitService,
-            CheckoutService checkoutService) {
+            CheckoutService checkoutService,
+            Plugin plugin,
+            DiffSubscriptions subs) {
         this.repos = Objects.requireNonNull(repos, "repos");
         this.worldDirty = Objects.requireNonNull(worldDirty, "worldDirty");
         this.adapters = Objects.requireNonNull(adapters, "adapters");
@@ -92,6 +101,8 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         this.messages = Objects.requireNonNull(messages, "messages");
         this.commitService = Objects.requireNonNull(commitService, "commitService");
         this.checkoutService = Objects.requireNonNull(checkoutService, "checkoutService");
+        this.plugin = Objects.requireNonNull(plugin, "plugin");
+        this.subs = Objects.requireNonNull(subs, "subs");
     }
 
     @Override
@@ -234,6 +245,32 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         return WorldDiffer.diffWorkingTree(repo, adapter);
     }
 
+    /** Compute the player's world working-vs-HEAD and push it as minegit:diff frames. No-op if the world has no repo. */
+    public void pushCurrentDiff(Player player) {
+        World world = player.getWorld();
+        String name = world.getName();
+        if (!repos.isBound(name)) {
+            return;
+        }
+        WorldAdapter adapter = adapters.apply(world);
+        try (MineGitRepo repo = MineGitRepo.open(repos.repoPath(name), adapter, clock)) {
+            WorldDiff diff = workingTreeDiff(repo, adapter, name);
+            DiffPush.push(plugin, player, diff);
+        } catch (RuntimeException e) {
+            plugin.getLogger().warning("diff overlay push failed for '" + name + "': " + e.getMessage());
+        }
+    }
+
+    /** Re-push the current working-vs-HEAD to every subscriber currently in the named world. */
+    public void repushSubscribersIn(String worldName) {
+        for (UUID id : subs.snapshot()) {
+            Player p = Bukkit.getPlayer(id);
+            if (p != null && p.getWorld().getName().equals(worldName)) {
+                pushCurrentDiff(p);
+            }
+        }
+    }
+
     private boolean doCommit(CommandSender sender, String[] args) {
         Player player = requirePlayer(sender);
         if (player == null) {
@@ -285,6 +322,9 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
                             + result.error().getMessage());
             return;
         }
+        // HEAD may have moved (or stayed put on nothing-to-commit) — refresh every subscriber in the
+        // world so their overlay reflects the new working-vs-HEAD. Idempotent per spec §2(d).
+        repushSubscribersIn(world);
         CommitInfo commit = result.commit();
         if (commit == null) {
             messages.send(sender,
@@ -444,6 +484,9 @@ public final class MineGitCommand implements CommandExecutor, TabCompleter {
         // Unprime (success only) so the next commit/status reconciles against the new baseline with a
         // full pass before trusting event-based tracking again.
         worldDirty.tracker(world).unprime();
+        // HEAD moved — refresh every subscriber in the world so their overlay tracks the new baseline
+        // (Spec §2(e)). After a checkout working == HEAD, so subscribers see an empty diff.
+        repushSubscribersIn(world);
         WorldDiff applied = result.applied();
         messages.send(sender,
                 ChatColor.GREEN + "Checked out " + ChatColor.YELLOW + ref

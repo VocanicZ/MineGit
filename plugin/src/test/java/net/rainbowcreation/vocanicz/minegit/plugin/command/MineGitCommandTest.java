@@ -17,6 +17,7 @@ import net.rainbowcreation.vocanicz.minegit.core.model.BlockState;
 import net.rainbowcreation.vocanicz.minegit.core.model.ChunkPos;
 import net.rainbowcreation.vocanicz.minegit.core.model.DimensionId;
 import net.rainbowcreation.vocanicz.minegit.core.model.NormalizedChunk;
+import net.rainbowcreation.vocanicz.minegit.plugin.net.DiffSubscriptions;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CheckoutService;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.CommitService;
 import net.rainbowcreation.vocanicz.minegit.plugin.world.WorldDirtyRegistry;
@@ -35,6 +36,7 @@ import java.util.function.Function;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -122,7 +124,10 @@ class MineGitCommandTest {
         Clock clock = Clock.fixed(Instant.ofEpochSecond(1780576496L), ZoneOffset.UTC);
         CommitService commits = new CommitService(INLINE, INLINE, 16);
         CheckoutService checkouts = new CheckoutService(INLINE, INLINE, 16);
-        return new MineGitCommand(repos, worldDirty, adapters, clock, messages, commits, checkouts);
+        Plugin plugin = mock(Plugin.class);
+        DiffSubscriptions subs = new DiffSubscriptions();
+        return new MineGitCommand(
+                repos, worldDirty, adapters, clock, messages, commits, checkouts, plugin, subs);
     }
 
     private Player player(String worldName) {
