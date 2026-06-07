@@ -16,7 +16,7 @@ commands:
 permissions:
   minegit.use:
     description: Use read/commit MineGit commands.
-    default: true
+    default: op
   minegit.admin:
     description: Use destructive MineGit commands (e.g. checkout).
     default: op

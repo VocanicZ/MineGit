@@ -46,7 +46,7 @@ import org.bukkit.entity.Player;
  */
 public final class MineGitCommand implements CommandExecutor, TabCompleter {
 
-    /** Permission for read/setup/commit commands; default-true so everyone can use them. */
+    /** Permission for read/setup/commit commands; op-or-granted (locked by default, parity 2026-06-07). */
     public static final String PERM_USE = "minegit.use";
 
     /** Permission for destructive commands (e.g. {@code checkout}); op-only by default. */
