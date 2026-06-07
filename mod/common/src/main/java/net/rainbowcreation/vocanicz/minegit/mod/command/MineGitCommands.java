@@ -256,7 +256,7 @@ public final class MineGitCommands {
                 .then(Commands.literal(NOFREEZE_FLAG).executes(action));
     }
 
-    /** A gated subcommand literal: {@code requires(hasPermission(level))} + the execution action. */
+    /** A gated subcommand literal: {@code requires(MineGitPermissions.require(node, level))} + the action. */
     private static LiteralArgumentBuilder<CommandSourceStack> subcommand(
             Subcommand sub, Command<CommandSourceStack> action) {
         return Commands.literal(sub.literal())
