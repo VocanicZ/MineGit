@@ -44,7 +44,7 @@ public final class ClientDiffEngine {
 
     public ClientDiffEngine(int cacheCap, Supplier<LevelAccess> levelSupplier) {
         this.cache = new HeadBaselineCache(cacheCap);
-        this.levelSupplier = levelSupplier;
+        this.levelSupplier = java.util.Objects.requireNonNull(levelSupplier, "levelSupplier");
     }
 
     /**

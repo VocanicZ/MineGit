@@ -122,18 +122,30 @@ class ClientDiffEngineTest {
 
     @Test
     void budgetSpreadsWorkAcrossTicks() {
-        // Two distinct dirty sections; a budget of 1 should take two ticks to fully reflect both.
+        // Two distinct dirty sections; a budget of 1 reflects only one per tick, both after two.
         FakeLevelAccess level = new FakeLevelAccess(DIM, 0, 2); // Y in [0,32): sections 0 and 1
         level.addLoadedChunk(0, 0);
         ClientDiffEngine engine = new ClientDiffEngine(256, () -> level);
         engine.onServerDiff(diffWith()); // seeds chunk (0,0): marks sections 0 and 1 dirty
-        // Player edits one block in section 0 and one in section 1.
+        // Player edits one block in section 0 (y=5) and one in section 1 (y=20).
         level.setBlock(1, 5, 1, STONE);
         engine.onBlockChange(DIM, 1, 5, 1);
         level.setBlock(1, 20, 1, STONE);
         engine.onBlockChange(DIM, 1, 20, 1);
-        // Drain the initial seed-marked sections first with a big tick, then the edits:
-        engine.tick(64);
+
+        engine.tick(1); // budget of 1 → only the first dirty section re-diffed
+        assertEquals(1, totalBoxes(engine.currentOverlay()));
+        engine.tick(1); // second tick drains the remaining section
         assertEquals(2, totalBoxes(engine.currentOverlay()));
+    }
+
+    @Test
+    void rejectsNullSupplier() {
+        try {
+            new ClientDiffEngine(256, null);
+            org.junit.jupiter.api.Assertions.fail("expected NullPointerException");
+        } catch (NullPointerException expected) {
+            // ok
+        }
     }
 }
