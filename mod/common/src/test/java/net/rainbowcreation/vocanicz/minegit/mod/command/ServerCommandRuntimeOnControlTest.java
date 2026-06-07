@@ -12,26 +12,9 @@ import net.rainbowcreation.vocanicz.minegit.protocol.DiffControl;
 import org.junit.jupiter.api.Test;
 
 /**
- * Verifies the {@code minegit.use} permission gate on {@code SUBSCRIBE} in
- * {@link ServerCommandRuntime#onControl} (SP1 transport-parity, 2026-06-07).
- *
- * <p><strong>Test-seam approach — two injected hooks:</strong>
- * <ol>
- *   <li>A package-private {@code ServerCommandRuntime(Clock, Executor, LiveSubscriptionLoop)}
- *       constructor injects a real {@link LiveSubscriptionLoop} backed by a no-op
- *       {@link DiffOverlaySender.Sink} ({@code canSend = false}, so no frames are emitted and the
- *       {@code ServerPlayer} argument is never used for I/O). Subscription state is observable via
- *       {@link LiveSubscriptionLoop#isSubscribed(UUID)} and {@link LiveSubscriptionLoop#subscriberCount()}.
- *   <li>A package-private {@code onControlInner(UUID, ServerPlayer, DiffControl, boolean, WorldDiff)}
- *       overload accepts all decisions already resolved: the player UUID, the pre-computed
- *       {@code permitted} flag, and the current diff. The production
- *       {@link ServerCommandRuntime#onControl(net.minecraft.server.level.ServerPlayer, DiffControl)}
- *       resolves these from the live player; tests supply an arbitrary UUID, {@code true}/{@code false}
- *       for the permission decision, and {@code null} for the diff (no bound repo — registering without
- *       an initial push). The {@code ServerPlayer} argument is also {@code null} (the loop passes it
- *       only to the sink's {@code canSend}/{@code sendTo}, which are no-ops here). This keeps the
- *       test completely headless — no real {@code ServerPlayer} or {@code CommandSourceStack} needed.
- * </ol>
+ * Headless unit tests for the {@code minegit.use} permission gate in
+ * {@link ServerCommandRuntime#onControl} / {@link ServerCommandRuntime#onControlInner} — see those
+ * methods' javadoc for the seam contract this test suite relies on (SP1, 2026-06-07).
  */
 class ServerCommandRuntimeOnControlTest {
 

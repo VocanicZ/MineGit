@@ -154,7 +154,12 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
         boolean permitted = MineGitPermissions
                 .require(Subcommand.DIFF.node(), Subcommand.DIFF.permissionLevel())
                 .test(player.createCommandSourceStack());
-        onControlInner(player.getUUID(), player, control, permitted, currentDiffFor(player));
+        // Resolve the diff only when it will actually be used: a permitted SUBSCRIBE needs it for
+        // the immediate push; a denied SUBSCRIBE discards it and UNSUBSCRIBE never uses it.
+        // Avoids a git status read (repo lookup + peekDirty scan) on denied SUBSCRIBEs and on
+        // every UNSUBSCRIBE — prevents exploitation by a spammy client on a large world.
+        WorldDiff diff = (permitted && control == DiffControl.SUBSCRIBE) ? currentDiffFor(player) : null;
+        onControlInner(player.getUUID(), player, control, permitted, diff);
     }
 
     /**
@@ -163,8 +168,9 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
      * {@link CommandSourceStack}. The production {@link #onControl(ServerPlayer, DiffControl)} resolves
      * these from the live player; tests supply arbitrary UUIDs, a pre-decided {@code permitted} flag,
      * and a null diff (no bound repo). The {@code player} argument here is forwarded verbatim to
-     * {@link LiveSubscriptionLoop#subscribe} — pass {@code null} in tests (the loop only uses it for
-     * the overlay push, which is a no-op when the recording sink's {@code canSend} returns false).
+     * {@link LiveSubscriptionLoop#subscribe} — pass {@code null} in tests: it is null-safe because
+     * {@link DiffOverlaySender#send} is gated on {@code canSend} (short-circuits before dereferencing
+     * the player), and {@link LiveSubscriptionLoop#subscribe} only {@code requireNonNull}s the {@code id}.
      */
     void onControlInner(UUID id, ServerPlayer player, DiffControl control,
             boolean permitted, WorldDiff currentDiff) {
@@ -175,6 +181,7 @@ public final class ServerCommandRuntime implements MineGitCommands.Runtime {
             live.subscribe(player, id, currentDiff);
         } else if (control == DiffControl.UNSUBSCRIBE) {
             live.unsubscribe(id); // UNSUBSCRIBE is never gated
+            // (exhaustive: DiffControl.fromByte rejects unknown bytes upstream, so no other value reaches here)
         }
     }
 
