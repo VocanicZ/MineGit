@@ -184,6 +184,29 @@ class ClientDiffEngineTest {
     }
 
     @Test
+    void cleanSeedDoesNotBacklogRealEditsBehindEmptySectionScans() {
+        // Perf/correctness regression: seeding a clean chunk must NOT mark all its sections dirty.
+        // With many tall chunks that backlog would drain at SECTION_BUDGET/tick for many seconds and
+        // a real edit would queue behind it. Here, after seeding 10 clean 16-section chunks under a
+        // small section budget, a fresh edit must surface within a single tick.
+        FakeLevelAccess level = new FakeLevelAccess(DIM, 0, 16); // 16 sections/chunk
+        for (int cx = 0; cx < 10; cx++) {
+            level.addLoadedChunk(cx, 0);
+        }
+        ClientDiffEngine engine = new ClientDiffEngine(256, () -> level);
+        engine.onServerDiff(emptyDiff());
+        for (int i = 0; i < 5; i++) {
+            engine.tick(8); // clean seeds must enqueue no diff work — old code backlogged ~160 sections
+        }
+        assertEquals(0, totalBoxes(engine.currentOverlay()));
+
+        level.setBlock(2 * 16 + 1, 5, 1, STONE); // one edit in an already-seeded chunk
+        engine.onBlockChange(DIM, 2 * 16 + 1, 5, 1);
+        engine.tick(8); // small budget; the edit's section must be the ONLY dirty one
+        assertEquals(1, totalBoxes(engine.currentOverlay())); // instant, not stuck behind a backlog
+    }
+
+    @Test
     void resetClearsEverything() {
         FakeLevelAccess level = world();
         level.setBlock(1, 5, 1, STONE);

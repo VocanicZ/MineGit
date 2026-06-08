@@ -106,7 +106,14 @@ public final class ClientDiffEngine {
     private void seedChunk(
             DimensionId dim, ChunkPos pos, List<BlockChange> changes, LevelAccess level) {
         cache.seed(dim, pos, changes, level);
-        tracker.markChunk(dim, pos, level.minSectionY(), level.sectionCount());
+        // Mark dirty ONLY the sections that carry pushed changes. A clean chunk equals HEAD at seed,
+        // so diffing it yields no boxes — marking every section (~24/chunk × the whole loaded set)
+        // would flood the dirty queue with thousands of empty scans, draining at SECTION_BUDGET/tick
+        // for tens of seconds and starving real edits behind the backlog. Future client edits mark
+        // their own section via onBlockChange.
+        for (BlockChange change : changes) {
+            tracker.markBlock(dim, change.getX(), change.getY(), change.getZ());
+        }
     }
 
     /** A block in the live world changed; mark its section dirty for re-diff on the next tick. */
