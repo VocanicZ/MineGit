@@ -18,7 +18,6 @@ repositories {
     mavenCentral()
     maven("https://maven.fabricmc.net/") { name = "Fabric" }
     maven("https://maven.architectury.dev/") { name = "Architectury" }
-    maven("https://maven.nucleoid.xyz/") { name = "Nucleoid (fabric-permissions-api)" }
 }
 
 architectury {
@@ -51,11 +50,12 @@ dependencies {
     modApi("net.fabricmc.fabric-api:fabric-api:$fabricApiVersion")
     modApi("dev.architectury:architectury-fabric:$architecturyVersion")
 
-    // Grantable permission nodes on Fabric (permission parity 2026-06-07). Mapping-agnostic — wraps
-    // SharedSuggestionProvider — so it is tolerant across MC patch versions. Bundled (include) so the
-    // production jar carries it; a perms backend (LuckPerms) supplies actual grants at runtime.
-    modImplementation("me.lucko:fabric-permissions-api:0.4.2-patbox.1")
-    include("me.lucko:fabric-permissions-api:0.4.2-patbox.1")
+    // No fabric-permissions-api: Fabric has no built-in node system, the shim broke across the
+    // 1.21.11 permission-model refactor (NoClassDefFoundError on join), and string nodes add no
+    // value here — both MineGit tiers gate on op level 2 anyway. MineGit gates on vanilla op-level
+    // on Fabric (the MineGitPermissions seam default); LuckPerms manages access through its own
+    // minecraft.command.minegit mapping with no mod extension required. NeoForge (PermissionAPI) and
+    // the Paper plugin (plugin.yml nodes) keep their granular node systems.
 
     common(project(":mod:common", configuration = "namedElements")) { isTransitive = false }
     shadowBundle(project(":mod:common", configuration = "transformProductionFabric")) { isTransitive = false }

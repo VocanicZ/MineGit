@@ -3,7 +3,6 @@ package net.rainbowcreation.vocanicz.minegit.mod;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.rainbowcreation.vocanicz.minegit.mod.command.permission.fabric.MineGitPermissionsImpl;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlChannel;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffControlPayload;
 import net.rainbowcreation.vocanicz.minegit.mod.net.DiffRawPayload;
@@ -13,7 +12,8 @@ public final class MineGitFabric implements ModInitializer {
 
     @Override
     public void onInitialize() {
-        MineGitPermissionsImpl.install();
+        // No Fabric permission installer: MineGit gates on the MineGitPermissions seam's vanilla
+        // op-level default. LuckPerms manages access via its own minecraft.command.minegit mapping.
         MineGitMod.init();
         // Register the minegit:diff S2C payload type on both dists so the server may send it and the
         // client may decode it (the client also registers a receiver — see MineGitFabricClient). The
